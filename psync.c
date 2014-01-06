@@ -171,12 +171,19 @@ out1:
   free(task);
 }
 
+static int cmpstringp(const void *p1, const void *p2) {
+  return strcmp(*(char * const *) p1, *(char * const *) p2);
+}
+
 static void sync_dir(const char *src_path, const char *dst_path, const char *rel_path) {
   DIR *d;
+  char *p;
   int rc, dst_exists;
   struct stat src_st, dst_st;
   struct utimbuf times;
   struct dirent *dirp;
+  char **src_contents;
+  size_t src_contents_size, src_contents_count, i;
   char src_p[PATH_MAX];
   char dst_p[PATH_MAX];
 
@@ -227,19 +234,36 @@ static void sync_dir(const char *src_path, const char *dst_path, const char *rel
     closedir(d);
   }
 
-  // synchronize files from src to dst
+  // read src contents into a sorted array
   d = opendir(src_path);
   if(!d) {
     perror(src_path);
     g_error = 1;
     return;
   }
+  src_contents_size = 256;
+  src_contents_count = 0;
+  src_contents = malloc(sizeof(char *) * src_contents_size);
   while((dirp = readdir(d))) {
     if(strcmp(dirp->d_name, ".") == 0 || strcmp(dirp->d_name, "..") == 0) {
       continue;
     }
-    snprintf(src_p, PATH_MAX, "%s/%s", src_path, dirp->d_name);
-    snprintf(dst_p, PATH_MAX, "%s/%s", dst_path, dirp->d_name);
+    p = malloc(strlen(dirp->d_name)+1);
+    strcpy(p, dirp->d_name);
+    src_contents[src_contents_count] = p;
+    if(++src_contents_count == src_contents_size) {
+      src_contents_size <<= 1;
+      src_contents = realloc(src_contents, sizeof(char *) * src_contents_size);
+    }
+  }
+  closedir(d);
+  qsort(src_contents, src_contents_count, sizeof(char *), cmpstringp);
+
+  // synchronize files from src to dst
+  for(i = 0; i < src_contents_count; ++i) {
+    p = src_contents[i];
+    snprintf(src_p, PATH_MAX, "%s/%s", src_path, p);
+    snprintf(dst_p, PATH_MAX, "%s/%s", dst_path, p);
 
     // stat src
     rc = lstat(src_p, &src_st);
@@ -281,7 +305,7 @@ static void sync_dir(const char *src_path, const char *dst_path, const char *rel
       }
 
       // recurse
-      snprintf(rel_p, PATH_MAX, "%s%s/", rel_path, dirp->d_name);
+      snprintf(rel_p, PATH_MAX, "%s%s/", rel_path, p);
       sync_dir(src_p, dst_p, rel_p);
 
       // set mode
@@ -369,7 +393,7 @@ static void sync_dir(const char *src_path, const char *dst_path, const char *rel
 
       // create dst
       if(!dst_exists) {
-        if(g_verbose) printf("%s%s\n", rel_path, dirp->d_name);
+        if(g_verbose) printf("%s%s\n", rel_path, p);
         rc = symlink(src_target, dst_p);
         if(rc) {
           perror(dst_p);
@@ -414,7 +438,7 @@ static void sync_dir(const char *src_path, const char *dst_path, const char *rel
          src_st.st_size  != dst_st.st_size ||
          src_st.st_mtime != dst_st.st_mtime
       ) { // dst does not exist or file size or mtime differ
-        if(g_verbose) printf("%s%s\n", rel_path, dirp->d_name);
+        if(g_verbose) printf("%s%s\n", rel_path, p);
         struct copy_task *task = malloc(sizeof(struct copy_task));
         task->src_st = src_st;
         task->dst_st = dst_st;
@@ -447,7 +471,13 @@ static void sync_dir(const char *src_path, const char *dst_path, const char *rel
       g_error = 1;
     }
   }
-  closedir(d);
+
+  // free src contents
+  for(i = 0; i < src_contents_count; ++i) {
+    p = src_contents[i];
+    free(p);
+  }
+  free(src_contents);
 }
 
 int main(int argc, char *argv[]) {
