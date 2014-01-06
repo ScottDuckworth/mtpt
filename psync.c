@@ -187,53 +187,6 @@ static void sync_dir(const char *src_path, const char *dst_path, const char *rel
   char src_p[PATH_MAX];
   char dst_p[PATH_MAX];
 
-  if(g_delete) {
-    // delete files in dst that are not in src
-    d = opendir(dst_path);
-    if(!d) {
-      perror(dst_path);
-      g_error = 1;
-      return;
-    }
-    while((dirp = readdir(d))) {
-      if(strcmp(dirp->d_name, ".") == 0 || strcmp(dirp->d_name, "..") == 0) {
-        continue;
-      }
-      snprintf(src_p, PATH_MAX, "%s/%s", src_path, dirp->d_name);
-      rc = lstat(src_p, &src_st);
-      if(rc && errno == ENOENT) {
-        snprintf(dst_p, PATH_MAX, "%s/%s", dst_path, dirp->d_name);
-#ifdef _DIRENT_HAVE_D_TYPE
-        if(dirp->d_type == DT_DIR) {
-          if(g_verbose) printf("deleting %s\n", dst_p);
-          unlink_dir(dst_p);
-          continue;
-        } else if(dirp->d_type == DT_REG) {
-          if(g_verbose) printf("deleting %s\n", dst_p);
-          unlink(dst_p);
-          continue;
-        }
-#endif
-        rc = lstat(dst_p, &dst_st);
-        if(rc) {
-          if(errno != ENOENT) {
-            perror(dst_p);
-            g_error = 1;
-          }
-          continue;
-        }
-        if(S_ISDIR(dst_st.st_mode)) {
-          if(g_verbose) printf("deleting %s\n", dst_p);
-          unlink_dir(dst_p);
-        } else {
-          if(g_verbose) printf("deleting %s\n", dst_p);
-          unlink(dst_p);
-        }
-      }
-    }
-    closedir(d);
-  }
-
   // read src contents into a sorted array
   d = opendir(src_path);
   if(!d) {
@@ -470,6 +423,52 @@ static void sync_dir(const char *src_path, const char *dst_path, const char *rel
       fprintf(stderr, "file type not supported: %s\n", src_p);
       g_error = 1;
     }
+  }
+
+  if(g_delete) {
+    // delete files in dst that are not in src
+    d = opendir(dst_path);
+    if(!d) {
+      perror(dst_path);
+      g_error = 1;
+      return;
+    }
+    while((dirp = readdir(d))) {
+      if(strcmp(dirp->d_name, ".") == 0 || strcmp(dirp->d_name, "..") == 0) {
+        continue;
+      }
+      p = dirp->d_name;
+      if(!bsearch(&p, src_contents, src_contents_count, sizeof(char *), cmpstringp)) {
+        snprintf(dst_p, PATH_MAX, "%s/%s", dst_path, p);
+#ifdef _DIRENT_HAVE_D_TYPE
+        if(dirp->d_type == DT_DIR) {
+          if(g_verbose) printf("deleting %s\n", dst_p);
+          unlink_dir(dst_p);
+          continue;
+        } else if(dirp->d_type == DT_REG) {
+          if(g_verbose) printf("deleting %s\n", dst_p);
+          unlink(dst_p);
+          continue;
+        }
+#endif
+        rc = lstat(dst_p, &dst_st);
+        if(rc) {
+          if(errno != ENOENT) {
+            perror(dst_p);
+            g_error = 1;
+          }
+          continue;
+        }
+        if(S_ISDIR(dst_st.st_mode)) {
+          if(g_verbose) printf("deleting %s\n", dst_p);
+          unlink_dir(dst_p);
+        } else {
+          if(g_verbose) printf("deleting %s\n", dst_p);
+          unlink(dst_p);
+        }
+      }
+    }
+    closedir(d);
   }
 
   // free src contents
