@@ -20,6 +20,7 @@ struct sync_file_arg {
   struct stat src_st;
   struct stat dst_st;
   int dst_exists;
+  int dst_fd;
   char src[PATH_MAX];
   char dst[PATH_MAX];
 };
@@ -115,21 +116,15 @@ static void sync_file_task(void *arg) {
   struct sync_file_arg *task = arg;
   ssize_t a, b, c;
   off_t length;
-  int src_fd, dst_fd, rc;
+  int src_fd, rc;
   char buf[IO_BUFFER_SIZE];
 
   // open src for reading
   src_fd = open(task->src, O_RDONLY);
   if(src_fd == -1) {
     perror(task->src);
-    goto out1;
-  }
-
-  // open dst for writing
-  dst_fd = open(task->dst, O_WRONLY | O_CREAT, 0600);
-  if(dst_fd == -1) {
-    perror(task->dst);
-    goto out2;
+    g_error = 1;
+    goto err1;
   }
 
   // copy the data
@@ -140,7 +135,7 @@ static void sync_file_task(void *arg) {
       // read error
       perror(task->src);
       g_error = 1;
-      goto out3;
+      goto err2;
     } else if(a == 0) {
       // end of file
       break;
@@ -148,30 +143,29 @@ static void sync_file_task(void *arg) {
       c = 0;
       length += a;
       do {
-        b = write(dst_fd, buf + c, a - c);
+        b = write(task->dst_fd, buf + c, a - c);
         if(b == -1) {
           // write error
           perror(task->dst);
           g_error = 1;
-          goto out3;
+          goto err2;
         } else {
           c += b;
         }
       } while(c < a);
     }
   }
-  rc = ftruncate(dst_fd, length);
+  rc = ftruncate(task->dst_fd, length);
   if(rc) {
     perror(task->dst);
     g_error = 1;
   }
 
-out3:
   // set mode
   if(!task->dst_exists ||
      task->src_st.st_mode != task->dst_st.st_mode
   ) {
-    rc = fchmod(dst_fd, task->src_st.st_mode);
+    rc = fchmod(task->dst_fd, task->src_st.st_mode);
     if(rc) {
       perror(task->dst);
       g_error = 1;
@@ -183,15 +177,14 @@ out3:
      task->src_st.st_uid != task->dst_st.st_uid ||
      task->src_st.st_gid != task->dst_st.st_gid
   ) {
-    rc = fchown(dst_fd, task->src_st.st_uid, task->src_st.st_gid);
+    rc = fchown(task->dst_fd, task->src_st.st_uid, task->src_st.st_gid);
     if(rc) {
       perror(task->dst);
       g_error = 1;
     }
   }
-
-  // close file
-  close(dst_fd);
+  close(src_fd);
+  close(task->dst_fd);
 
   // set mtime
   rc = settimes(task->dst, &task->src_st, 0);
@@ -199,9 +192,14 @@ out3:
     perror(task->dst);
     g_error = 1;
   }
-out2:
+
+  free(task);
+  return;
+
+err2:
   close(src_fd);
-out1:
+err1:
+  close(task->dst_fd);
   free(task);
 }
 
@@ -240,11 +238,23 @@ static void sync_file(
      src_st->st_size != dst_st.st_size ||
      !samemtime(src_st, &dst_st)
   ) { // dst does not exist or file size or mtime differ
+    struct sync_file_arg *task;
+    int dst_fd;
+
+    // open dst for writing
+    dst_fd = open(dst_path, O_WRONLY | O_CREAT, 0600);
+    if(dst_fd == -1) {
+      perror(dst_path);
+      g_error = 1;
+      return;
+    }
+
     if(g_verbose) printf("%s\n", rel_path);
-    struct sync_file_arg *task = malloc(sizeof(struct sync_file_arg));
+    task = malloc(sizeof(struct sync_file_arg));
     task->src_st = *src_st;
     task->dst_st = dst_st;
     task->dst_exists = dst_exists;
+    task->dst_fd = dst_fd;
     strcpy(task->src, src_path);
     strcpy(task->dst, dst_path);
     threadpool_add(&g_tp, sync_file_task, task);
@@ -255,6 +265,7 @@ static void sync_file(
       if(rc) {
         perror(dst_path);
         g_error = 1;
+        return;
       }
     }
 
