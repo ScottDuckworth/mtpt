@@ -98,6 +98,9 @@ static int settimes(const char *path, const struct stat *st, int symlink) {
 #ifdef __linux__
   tv[0].tv_usec = st->st_atim.tv_nsec / 1000;
   tv[1].tv_usec = st->st_mtim.tv_nsec / 1000;
+#else
+  tv[0].tv_usec = 0;
+  tv[1].tv_usec = 0;
 #endif
 #if defined __linux__ || defined __FreeBSD__
   return lutimes(path, tv);
