@@ -16,7 +16,7 @@
 
 #define IO_BUFFER_SIZE (1<<20) // 1 MB
 
-struct copy_task {
+struct sync_file_arg {
   struct stat src_st;
   struct stat dst_st;
   int dst_exists;
@@ -79,6 +79,10 @@ static void unlink_dir(const char *path) {
   }
 }
 
+static int cmpstringp(const void *p1, const void *p2) {
+  return strcmp(*(char * const *) p1, *(char * const *) p2);
+}
+
 static inline int samemtime(const struct stat *a, const struct stat *b) {
   return a->st_mtime == b->st_mtime
 #ifdef __linux__
@@ -104,8 +108,8 @@ static int settimes(const char *path, const struct stat *st, int symlink) {
 #endif
 }
 
-static void copy_file(void *arg) {
-  struct copy_task *task = arg;
+static void sync_file_task(void *arg) {
+  struct sync_file_arg *task = arg;
   ssize_t a, b, c;
   off_t length;
   int src_fd, dst_fd, rc;
@@ -198,20 +202,222 @@ out1:
   free(task);
 }
 
-static int cmpstringp(const void *p1, const void *p2) {
-  return strcmp(*(char * const *) p1, *(char * const *) p2);
+static void sync_file(
+  const struct stat *src_st,
+  const char *src_path,
+  const char *dst_path,
+  const char *rel_path
+) {
+  int rc, dst_exists;
+  struct stat dst_st;
+
+  // stat dst
+  rc = lstat(dst_path, &dst_st);
+  dst_exists = 1;
+  if(rc) {
+    if(errno != ENOENT) {
+      perror(dst_path);
+      g_error = 1;
+      return;
+    }
+    dst_exists = 0;
+  }
+
+  // remove dst if not a regular file
+  if(dst_exists && !S_ISREG(dst_st.st_mode)) {
+    if(S_ISDIR(dst_st.st_mode)) {
+      unlink_dir(dst_path);
+    } else {
+      unlink(dst_path);
+    }
+    dst_exists = 0;
+  }
+
+  if(!dst_exists ||
+     src_st->st_size != dst_st.st_size ||
+     !samemtime(src_st, &dst_st)
+  ) { // dst does not exist or file size or mtime differ
+    if(g_verbose) printf("%s\n", rel_path);
+    struct sync_file_arg *task = malloc(sizeof(struct sync_file_arg));
+    task->src_st = *src_st;
+    task->dst_st = dst_st;
+    task->dst_exists = dst_exists;
+    strcpy(task->src, src_path);
+    strcpy(task->dst, dst_path);
+    threadpool_add(&g_tp, sync_file_task, task);
+  } else { // file size and mtime are the same
+    // set mode
+    if(src_st->st_mode != dst_st.st_mode) {
+      rc = chmod(dst_path, src_st->st_mode);
+      if(rc) {
+        perror(dst_path);
+        g_error = 1;
+      }
+    }
+
+    // set uid and gid
+    if(src_st->st_uid != dst_st.st_uid ||
+       src_st->st_gid != dst_st.st_gid
+    ) {
+      rc = chown(dst_path, src_st->st_uid, src_st->st_gid);
+      if(rc) {
+        perror(dst_path);
+        g_error = 1;
+      }
+    }
+  }
 }
 
-static void sync_dir(const char *src_path, const char *dst_path, const char *rel_path) {
+static void sync_symlink(
+  const struct stat *src_st,
+  const char *src_path,
+  const char *dst_path,
+  const char *rel_path
+) {
+  int rc, dst_exists;
+  struct stat dst_st;
+  ssize_t src_len, dst_len;
+  char src_target[PATH_MAX];
+  char dst_target[PATH_MAX];
+
+  // stat dst
+  rc = lstat(dst_path, &dst_st);
+  dst_exists = 1;
+  if(rc) {
+    if(errno != ENOENT) {
+      perror(dst_path);
+      g_error = 1;
+      return;
+    }
+    dst_exists = 0;
+  }
+
+  // read src target
+  src_len = readlink(src_path, src_target, PATH_MAX-1);
+  if(src_len == -1) {
+    if(errno == ENOENT) {
+      // src was removed
+      if(dst_exists) {
+        unlink(dst_path);
+      }
+    } else {
+      perror(src_path);
+      g_error = 1;
+    }
+    return;
+  }
+  src_target[src_len] = '\0';
+
+  // remove dst if not a symlink
+  if(dst_exists && !S_ISLNK(dst_st.st_mode)) {
+    if(S_ISDIR(dst_st.st_mode)) {
+      unlink_dir(dst_path);
+    } else {
+      unlink(dst_path);
+    }
+    dst_exists = 0;
+  }
+
+  if(dst_exists) {
+    // read dst target
+    dst_len = readlink(dst_path, dst_target, PATH_MAX-1);
+    if(dst_len == -1) {
+      if(errno != ENOENT) {
+        rc = unlink(dst_path);
+        if(rc && errno != ENOENT) {
+          perror(dst_path);
+          g_error = 1;
+        }
+      }
+      dst_exists = 0;
+    } else {
+      dst_target[dst_len] = '\0';
+      // remove dst if target differs
+      if(src_len != dst_len || strcmp(src_target, dst_target) != 0) {
+        unlink(dst_path);
+        dst_exists = 0;
+      }
+    }
+  }
+
+  // create dst
+  if(!dst_exists) {
+    if(g_verbose) printf("%s\n", rel_path);
+    rc = symlink(src_target, dst_path);
+    if(rc) {
+      perror(dst_path);
+      g_error = 1;
+      return;
+    }
+  }
+
+  // set uid and gid
+  if(!dst_exists ||
+     src_st->st_uid != dst_st.st_uid ||
+     src_st->st_gid != dst_st.st_gid
+  ) {
+    rc = lchown(dst_path, src_st->st_uid, src_st->st_gid);
+    if(rc) {
+      perror(dst_path);
+      g_error = 1;
+    }
+  }
+
+  // set mtime
+  rc = settimes(dst_path, src_st, 1);
+  if(rc) {
+    perror(dst_path);
+    g_error = 1;
+  }
+}
+
+static void sync_dir(
+  const struct stat *src_st,
+  const char *src_path,
+  const char *dst_path,
+  const char *rel_path
+) {
+  int rc, dst_exists;
+  struct stat dst_st, content_st;
   DIR *d;
   char *p;
-  int rc, dst_exists;
-  struct stat src_st, dst_st;
   struct dirent *dirp;
   char **src_contents;
   size_t src_contents_size, src_contents_count, i;
+  unsigned int src_len;
+  unsigned int dst_len;
+  unsigned int rel_len;
   char src_p[PATH_MAX];
   char dst_p[PATH_MAX];
+  char rel_p[PATH_MAX];
+
+  // stat dst
+  rc = lstat(dst_path, &dst_st);
+  dst_exists = 1;
+  if(rc) {
+    if(errno != ENOENT) {
+      perror(dst_path);
+      g_error = 1;
+      return;
+    }
+    dst_exists = 0;
+  }
+
+  // remove dst if not a directory
+  if(dst_exists && !S_ISDIR(dst_st.st_mode)) {
+    unlink(dst_path);
+    dst_exists = 0;
+  }
+
+  // create dst
+  if(!dst_exists) {
+    rc = mkdir(dst_path, 0700);
+    if(rc && errno != EEXIST) {
+      perror(dst_path);
+      g_error = 1;
+      return;
+    }
+  }
 
   // read src contents into a sorted array
   d = opendir(src_path);
@@ -238,215 +444,48 @@ static void sync_dir(const char *src_path, const char *dst_path, const char *rel
   closedir(d);
   qsort(src_contents, src_contents_count, sizeof(char *), cmpstringp);
 
-  // synchronize files from src to dst
+  src_len = strlen(src_path);
+  strcpy(src_p, src_path);
+  src_p[src_len++] = '/';
+  dst_len = strlen(dst_path);
+  strcpy(dst_p, dst_path);
+  dst_p[dst_len++] = '/';
+  rel_len = strlen(rel_path);
+  strcpy(rel_p, rel_path);
+
+  // loop through src contents
   for(i = 0; i < src_contents_count; ++i) {
     p = src_contents[i];
-    snprintf(src_p, PATH_MAX, "%s/%s", src_path, p);
-    snprintf(dst_p, PATH_MAX, "%s/%s", dst_path, p);
+    strncpy(src_p + src_len, p, PATH_MAX - src_len);
+    strncpy(dst_p + dst_len, p, PATH_MAX - dst_len);
 
     // stat src
-    rc = lstat(src_p, &src_st);
+    rc = lstat(src_p, &content_st);
     if(rc) {
       perror(src_p);
       g_error = 1;
       continue;
     }
 
-    // stat dst
-    rc = lstat(dst_p, &dst_st);
-    dst_exists = 1;
-    if(rc) {
-      if(errno != ENOENT) {
-        perror(dst_p);
-        g_error = 1;
-        continue;
-      }
-      dst_exists = 0;
-    }
-
-    if(S_ISDIR(src_st.st_mode)) {
-      char rel_p[PATH_MAX];
-
-      // remove dst if not a directory
-      if(dst_exists && !S_ISDIR(dst_st.st_mode)) {
-        unlink(dst_p);
-        dst_exists = 0;
-      }
-
-      // create dst
-      if(!dst_exists) {
-        rc = mkdir(dst_p, 0700);
-        if(rc && errno != EEXIST) {
-          perror(dst_p);
-          g_error = 1;
-          continue;
-        }
-      }
-
-      // recurse
-      snprintf(rel_p, PATH_MAX, "%s%s/", rel_path, p);
-      sync_dir(src_p, dst_p, rel_p);
-
-      // set mode
-      if(!dst_exists ||
-         src_st.st_mode != dst_st.st_mode
-      ) {
-        rc = chmod(dst_p, src_st.st_mode);
-        if(rc) {
-          perror(dst_p);
-          g_error = 1;
-        }
-      }
-
-      // set uid and gid
-      if(!dst_exists ||
-         src_st.st_uid != dst_st.st_uid ||
-         src_st.st_gid != dst_st.st_gid
-      ) {
-        rc = chown(dst_p, src_st.st_uid, src_st.st_gid);
-        if(rc) {
-          perror(dst_p);
-          g_error = 1;
-        }
-      }
-
-      // set mtime
-      rc = settimes(dst_p, &src_st, 0);
-      if(rc) {
-        perror(dst_p);
-        g_error = 1;
-      }
-    } else if(S_ISLNK(src_st.st_mode)) {
-      ssize_t src_len, dst_len;
-      char src_target[PATH_MAX];
-      char dst_target[PATH_MAX];
-
-      // read src target
-      src_len = readlink(src_p, src_target, PATH_MAX-1);
-      if(src_len == -1) {
-        if(errno == ENOENT) {
-          // src was removed
-          if(dst_exists) {
-            unlink(dst_p);
-          }
-        } else {
-          perror(src_p);
-          g_error = 1;
-        }
-        continue;
-      }
-      src_target[src_len] = '\0';
-
-      // remove dst if not a symlink
-      if(dst_exists && !S_ISLNK(dst_st.st_mode)) {
-        if(S_ISDIR(dst_st.st_mode)) {
-          unlink_dir(dst_p);
-        } else {
-          unlink(dst_p);
-        }
-        dst_exists = 0;
-      }
-
-      if(dst_exists) {
-        // read dst target
-        dst_len = readlink(dst_p, dst_target, PATH_MAX-1);
-        if(dst_len == -1) {
-          if(errno == ENOENT) {
-            dst_exists = 0;
-          } else {
-            perror(dst_p);
-            g_error = 1;
-            continue;
-          }
-        } else {
-          dst_target[dst_len] = '\0';
-          // remove dst if target differs
-          if(src_len != dst_len || strcmp(src_target, dst_target) != 0) {
-            unlink(dst_p);
-            dst_exists = 0;
-          }
-        }
-      }
-
-      // create dst
-      if(!dst_exists) {
-        if(g_verbose) printf("%s%s\n", rel_path, p);
-        rc = symlink(src_target, dst_p);
-        if(rc) {
-          perror(dst_p);
-          g_error = 1;
-          continue;
-        }
-      }
-
-      // set uid and gid
-      if(!dst_exists ||
-         src_st.st_uid != dst_st.st_uid ||
-         src_st.st_gid != dst_st.st_gid
-      ) {
-        rc = lchown(dst_p, src_st.st_uid, src_st.st_gid);
-        if(rc) {
-          perror(dst_p);
-          g_error = 1;
-        }
-      }
-
-      // set mtime
-      rc = settimes(dst_p, &src_st, 1);
-      if(rc) {
-        perror(dst_p);
-        g_error = 1;
-      }
-    } else if(S_ISREG(src_st.st_mode)) {
-      // remove dst if not a regular file
-      if(dst_exists && !S_ISREG(dst_st.st_mode)) {
-        if(S_ISDIR(dst_st.st_mode)) {
-          unlink_dir(dst_p);
-        } else {
-          unlink(dst_p);
-        }
-        dst_exists = 0;
-      }
-
-      if(!dst_exists ||
-         src_st.st_size  != dst_st.st_size ||
-         !samemtime(&src_st, &dst_st)
-      ) { // dst does not exist or file size or mtime differ
-        if(g_verbose) printf("%s%s\n", rel_path, p);
-        struct copy_task *task = malloc(sizeof(struct copy_task));
-        task->src_st = src_st;
-        task->dst_st = dst_st;
-        strcpy(task->src, src_p);
-        strcpy(task->dst, dst_p);
-        threadpool_add(&g_tp, copy_file, task);
-      } else { // file size and mtime are the same
-        // set mode
-        if(src_st.st_mode != dst_st.st_mode) {
-          rc = chmod(dst_p, src_st.st_mode);
-          if(rc) {
-            perror(dst_p);
-            g_error = 1;
-          }
-        }
-
-        // set uid and gid
-        if(src_st.st_uid != dst_st.st_uid ||
-           src_st.st_gid != dst_st.st_gid
-        ) {
-          rc = chown(dst_p, src_st.st_uid, src_st.st_gid);
-          if(rc) {
-            perror(dst_p);
-            g_error = 1;
-          }
-        }
-      }
+    if(S_ISDIR(content_st.st_mode)) {
+      unsigned int l = rel_len + strlen(p);
+      strcpy(rel_p + rel_len, p);
+      rel_p[l] = '/';
+      rel_p[l+1] = '\0';
+      sync_dir(&content_st, src_p, dst_p, rel_p);
+    } else if(S_ISREG(content_st.st_mode)) {
+      snprintf(rel_p, PATH_MAX, "%s%s", rel_path, p);
+      sync_file(&content_st, src_p, dst_p, rel_p);
+    } else if(S_ISLNK(content_st.st_mode)) {
+      snprintf(rel_p, PATH_MAX, "%s%s", rel_path, p);
+      sync_symlink(&content_st, src_p, dst_p, rel_p);
     } else {
       fprintf(stderr, "file type not supported: %s\n", src_p);
       g_error = 1;
     }
   }
 
-  if(g_delete) {
+  if(g_delete && !samemtime(src_st, &dst_st)) {
     // delete files in dst that are not in src
     d = opendir(dst_path);
     if(!d) {
@@ -490,6 +529,36 @@ static void sync_dir(const char *src_path, const char *dst_path, const char *rel
       }
     }
     closedir(d);
+  }
+
+  // set mode
+  if(!dst_exists ||
+     src_st->st_mode != dst_st.st_mode
+  ) {
+    rc = chmod(dst_path, src_st->st_mode);
+    if(rc) {
+      perror(dst_path);
+      g_error = 1;
+    }
+  }
+
+  // set uid and gid
+  if(!dst_exists ||
+     src_st->st_uid != dst_st.st_uid ||
+     src_st->st_gid != dst_st.st_gid
+  ) {
+    rc = chown(dst_path, src_st->st_uid, src_st->st_gid);
+    if(rc) {
+      perror(dst_path);
+      g_error = 1;
+    }
+  }
+
+  // set mtime
+  rc = settimes(dst_path, src_st, 0);
+  if(rc) {
+    perror(dst_path);
+    g_error = 1;
   }
 
   // free src contents
@@ -551,13 +620,6 @@ int main(int argc, char *argv[]) {
     exit(2);
   }
 
-  // create destination if does not exist
-  rc = mkdir(dst_path, 0700);
-  if(rc && errno != EEXIST) {
-    perror(dst_path);
-    exit(1);
-  }
-
   // start thread pool
   rc = threadpool_init(&g_tp, threads, threads);
   if(rc) {
@@ -566,7 +628,7 @@ int main(int argc, char *argv[]) {
     exit(2);
   }
 
-  sync_dir(src_path, dst_path, "");
+  sync_dir(&src_st, src_path, dst_path, "");
 
   // shutdown thread pool
   rc = threadpool_destroy(&g_tp);
@@ -574,27 +636,6 @@ int main(int argc, char *argv[]) {
     errno = rc;
     perror("threadpool_destroy()");
     exit(2);
-  }
-
-  // set mode
-  rc = chmod(dst_path, src_st.st_mode);
-  if(rc) {
-    perror(dst_path);
-    g_error = 1;
-  }
-
-  // set uid and gid
-  rc = chown(dst_path, src_st.st_uid, src_st.st_gid);
-  if(rc) {
-    perror(dst_path);
-    g_error = 1;
-  }
-
-  // set mtime
-  rc = settimes(dst_path, &src_st, 0);
-  if(rc) {
-    perror(dst_path);
-    g_error = 1;
   }
 
   exit(g_error);
