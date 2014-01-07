@@ -1,4 +1,5 @@
 #define _BSD_SOURCE
+#define _FILE_OFFSET_BITS 64
 #include "threadpool.h"
 #include <dirent.h>
 #include <errno.h>
