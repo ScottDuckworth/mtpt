@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <sys/types.h>
 #include <unistd.h>
 #include <utime.h>
@@ -77,9 +78,33 @@ static void unlink_dir(const char *path) {
   }
 }
 
+static inline int samemtime(const struct stat *a, const struct stat *b) {
+  return a->st_mtime == b->st_mtime
+#ifdef __linux__
+         && a->st_mtim.tv_nsec == b->st_mtim.tv_nsec
+#endif
+  ;
+}
+
+static int settimes(const char *path, const struct stat *st, int symlink) {
+  struct timeval tv[2];
+  tv[0].tv_sec = st->st_atime;
+  tv[1].tv_sec = st->st_mtime;
+#ifdef __linux__
+  tv[0].tv_usec = st->st_atim.tv_nsec / 1000;
+  tv[1].tv_usec = st->st_mtim.tv_nsec / 1000;
+#endif
+#if defined __linux__ || defined __FreeBSD__
+  return lutimes(path, tv);
+#else
+  // lutimes() does not exist so there is no way to set times of a symlink
+  if(symlink) return 0;
+  return utimes(path, tv);
+#endif
+}
+
 static void copy_file(void *arg) {
   struct copy_task *task = arg;
-  struct utimbuf times;
   ssize_t a, b, c;
   off_t length;
   int src_fd, dst_fd, rc;
@@ -158,9 +183,7 @@ out3:
   close(dst_fd);
 
   // set mtime
-  times.actime = task->src_st.st_atime;
-  times.modtime = task->src_st.st_mtime;
-  rc = utime(task->dst, &times);
+  rc = settimes(task->dst, &task->src_st, 0);
   if(rc) {
     perror(task->dst);
     g_error = 1;
@@ -180,7 +203,6 @@ static void sync_dir(const char *src_path, const char *dst_path, const char *rel
   char *p;
   int rc, dst_exists;
   struct stat src_st, dst_st;
-  struct utimbuf times;
   struct dirent *dirp;
   char **src_contents;
   size_t src_contents_size, src_contents_count, i;
@@ -285,9 +307,7 @@ static void sync_dir(const char *src_path, const char *dst_path, const char *rel
       }
 
       // set mtime
-      times.actime = src_st.st_atime;
-      times.modtime = src_st.st_mtime;
-      rc = utime(dst_p, &times);
+      rc = settimes(dst_p, &src_st, 0);
       if(rc) {
         perror(dst_p);
         g_error = 1;
@@ -367,15 +387,12 @@ static void sync_dir(const char *src_path, const char *dst_path, const char *rel
         }
       }
 
-      /* FIXME this updates target times, use lutimes()
-      times.actime = src_st.st_atime;
-      times.modtime = src_st.st_mtime;
-      rc = utime(dst_p, &times);
+      // set mtime
+      rc = settimes(dst_p, &src_st, 1);
       if(rc) {
         perror(dst_p);
         g_error = 1;
       }
-      */
     } else if(S_ISREG(src_st.st_mode)) {
       // remove dst if not a regular file
       if(dst_exists && !S_ISREG(dst_st.st_mode)) {
@@ -389,7 +406,7 @@ static void sync_dir(const char *src_path, const char *dst_path, const char *rel
 
       if(!dst_exists ||
          src_st.st_size  != dst_st.st_size ||
-         src_st.st_mtime != dst_st.st_mtime
+         !samemtime(&src_st, &dst_st)
       ) { // dst does not exist or file size or mtime differ
         if(g_verbose) printf("%s%s\n", rel_path, p);
         struct copy_task *task = malloc(sizeof(struct copy_task));
@@ -483,7 +500,6 @@ int main(int argc, char *argv[]) {
   int rc, opt, threads;
   const char *src_path, *dst_path;
   struct stat src_st;
-  struct utimbuf times;
 
   threads = 4;
 
@@ -571,9 +587,7 @@ int main(int argc, char *argv[]) {
   }
 
   // set mtime
-  times.actime = src_st.st_atime;
-  times.modtime = src_st.st_mtime;
-  rc = utime(dst_path, &times);
+  rc = settimes(dst_path, &src_st, 0);
   if(rc) {
     perror(dst_path);
     g_error = 1;
