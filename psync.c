@@ -111,12 +111,15 @@ static void copy_file(void *arg) {
   int src_fd, dst_fd, rc;
   char buf[IO_BUFFER_SIZE];
 
+  // open src for reading
   src_fd = open(task->src, O_RDONLY);
   if(src_fd == -1) {
     perror(task->src);
     goto out1;
   }
-  dst_fd = open(task->dst, O_WRONLY | O_CREAT, task->src_st.st_mode);
+
+  // open dst for writing
+  dst_fd = open(task->dst, O_WRONLY | O_CREAT, 0600);
   if(dst_fd == -1) {
     perror(task->dst);
     goto out2;
@@ -272,7 +275,7 @@ static void sync_dir(const char *src_path, const char *dst_path, const char *rel
 
       // create dst
       if(!dst_exists) {
-        rc = mkdir(dst_p, src_st.st_mode);
+        rc = mkdir(dst_p, 0700);
         if(rc && errno != EEXIST) {
           perror(dst_p);
           g_error = 1;
@@ -549,7 +552,7 @@ int main(int argc, char *argv[]) {
   }
 
   // create destination if does not exist
-  rc = mkdir(dst_path, src_st.st_mode);
+  rc = mkdir(dst_path, 0700);
   if(rc && errno != EEXIST) {
     perror(dst_path);
     exit(1);
