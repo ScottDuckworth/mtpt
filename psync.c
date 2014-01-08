@@ -58,17 +58,27 @@ static void unlink_dir(const char *path) {
       continue;
     }
     snprintf(p, PATH_MAX, "%s/%s", path, dirp->d_name);
-
+#ifdef _DIRENT_HAVE_D_TYPE
+    switch(dirp->d_type) {
+    case DT_UNKNOWN:
+      break;
+    case DT_DIR:
+      goto delete_dir;
+    default:
+      goto delete_other;
+    }
+#endif
     rc = lstat(p, &st);
     if(rc) {
       perror(p);
       g_error = 1;
       continue;
     }
-
     if(S_ISDIR(st.st_mode)) {
+    delete_dir:
       unlink_dir(p);
     } else {
+    delete_other:
       unlink(p);
     }
   }
@@ -515,14 +525,13 @@ static void sync_dir(
       if(!bsearch(&p, src_contents, src_contents_count, sizeof(char *), cmpstringp)) {
         snprintf(dst_p, PATH_MAX, "%s/%s", dst_path, p);
 #ifdef _DIRENT_HAVE_D_TYPE
-        if(dirp->d_type == DT_DIR) {
-          if(g_verbose) printf("deleting %s\n", dst_p);
-          unlink_dir(dst_p);
-          continue;
-        } else if(dirp->d_type == DT_REG) {
-          if(g_verbose) printf("deleting %s\n", dst_p);
-          unlink(dst_p);
-          continue;
+        switch(dirp->d_type) {
+        case DT_UNKNOWN:
+          break;
+        case DT_DIR:
+          goto delete_dir;
+        default:
+          goto delete_other;
         }
 #endif
         rc = lstat(dst_p, &dst_st);
@@ -534,9 +543,11 @@ static void sync_dir(
           continue;
         }
         if(S_ISDIR(dst_st.st_mode)) {
+        delete_dir:
           if(g_verbose) printf("deleting %s\n", dst_p);
           unlink_dir(dst_p);
         } else {
+        delete_other:
           if(g_verbose) printf("deleting %s\n", dst_p);
           unlink(dst_p);
         }
