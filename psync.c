@@ -30,6 +30,7 @@
 
 #define _BSD_SOURCE
 #define _FILE_OFFSET_BITS 64
+#include "mtpt.h"
 #include "threadpool.h"
 #include <dirent.h>
 #include <errno.h>
@@ -150,6 +151,22 @@ static int settimes(const char *path, const struct stat *st, int symlink) {
   if(symlink) return 0;
   return utimes(path, tv);
 #endif
+}
+
+static int traverse_dir_enter(void *arg, const char *path, const struct stat *st) {
+  return 1;
+}
+
+static int traverse_dir_exit(void *arg, const char *path, const struct stat *st) {
+  return 0;
+}
+
+static int traverse_file(void *arg, const char *path, const struct stat *st) {
+  return 0;
+}
+
+static int traverse_error(void *arg, const char *path, const struct stat *st) {
+  return 0;
 }
 
 static void sync_file_task(void *arg) {

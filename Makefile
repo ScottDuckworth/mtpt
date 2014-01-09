@@ -7,7 +7,7 @@ all: psync
 clean:
 	rm -f psync *.o
 
-psync: psync.o threadpool.o
+psync: threadpool.o mtpt.o psync.o
 	$(CC) $^ $(LDFLAGS) -o $@
 
 %.o: %.c
