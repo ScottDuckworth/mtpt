@@ -509,7 +509,7 @@ static void sync_dir(
     }
   }
 
-  if(g_delete && !samemtime(src_st, &dst_st)) {
+  if(g_delete && dst_exists && !samemtime(src_st, &dst_st)) {
     // delete files in dst that are not in src
     d = opendir(dst_path);
     if(!d) {
