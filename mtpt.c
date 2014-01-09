@@ -81,6 +81,10 @@ static void mtpt_task_delete(mtpt_task_t *task) {
   free(task);
 }
 
+static int cmpstringp(const void *p1, const void *p2) {
+  return strcmp(*(char * const *) p1, *(char * const *) p2);
+}
+
 static void task_handler(void *arg) {
   mtpt_task_t *task = arg;
   mtpt_t *mtpt = task->mtpt;
@@ -103,13 +107,36 @@ static void task_handler(void *arg) {
           if(mtpt->error_method)
             (*mtpt->error_method)(mtpt->arg, task->path, &task->st);
         } else {
+          char *p;
+          char **contents;
+          size_t contents_size, contents_count, i;
+
+          // read contents into a sorted array
+          contents_size = 256;
+          contents_count = 0;
+          contents = malloc(sizeof(char *) * contents_size);
           while((dirp = readdir(d))) {
+            if(strcmp(dirp->d_name, ".") == 0 || strcmp(dirp->d_name, "..") == 0)
+              continue;
+            p = malloc(strlen(dirp->d_name)+1);
+            strcpy(p, dirp->d_name);
+            contents[contents_count] = p;
+            if(++contents_count == contents_size) {
+              contents_size <<= 1;
+              contents = realloc(contents, sizeof(char *) * contents_size);
+            }
+          }
+          closedir(d);
+          if(mtpt->config & MTPT_CONFIG_SORT)
+            qsort(contents, contents_count, sizeof(char *), cmpstringp);
+
+          // loop through contents
+          for(i = 0; i < contents_count; ++i) {
             struct stat st;
             char path[PATH_MAX];
 
-            if(strcmp(dirp->d_name, ".") == 0 || strcmp(dirp->d_name, "..") == 0)
-              continue;
-            snprintf(path, PATH_MAX, "%s/%s", task->path, dirp->d_name);
+            p = contents[i];
+            snprintf(path, PATH_MAX, "%s/%s", task->path, p);
             rc = lstat(path, &st);
             if(rc) {
               if(errno != ENOENT) {
@@ -140,7 +167,13 @@ static void task_handler(void *arg) {
                 (*mtpt->file_method)(mtpt->arg, path, &st);
             }
           }
-          closedir(d);
+
+          // free contents
+          for(i = 0; i < contents_count; ++i) {
+            p = contents[i];
+            free(p);
+          }
+          free(contents);
         }
       }
       if(task->children == 0) {

@@ -43,7 +43,13 @@
  * Assign each non-directory to a task.  The default is to process each
  * non-directory in the same task as the directory itself.
  */
-#define MTPT_CONFIG_FILE_TASKS 1
+#define MTPT_CONFIG_FILE_TASKS 0x1
+
+/**
+ * Walk through directory contents in sorted order.  This does not guarantee
+ * that they will be traversed in sorted order.
+ */
+#define MTPT_CONFIG_SORT 0x2
 
 /**
  * The type expected for the callback methods.
