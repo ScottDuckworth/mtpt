@@ -22,23 +22,24 @@ struct threadpool {
   int stop;
 
   /// number of threads
-  unsigned int n;
+  size_t nthreads;
 
   /// number of tasks currently running
-  unsigned int running;
+  size_t running;
 
   /// thread array
   pthread_t *threads;
 
   /// task queue
   struct threadpool_task *q;
-  unsigned int qsize;
-  unsigned int qhead;
-  unsigned int qcount;
+  size_t qsize;
+  size_t qhead;
+  size_t qcount;
+  size_t qmax;
 };
 
 /// initialize a threadpool
-int threadpool_init(struct threadpool *tp, unsigned int threads, unsigned int qsize);
+int threadpool_init(struct threadpool *tp, size_t nthreads, size_t qmax);
 
 /// add a task to a threadpool
 int threadpool_add(struct threadpool *tp, void (*routine)(void *), void *arg);
