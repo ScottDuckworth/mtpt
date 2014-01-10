@@ -126,9 +126,9 @@ static mtpt_dir_entry_t * mtpt_dir_entry_new(const char *name) {
 }
 
 static int mtpt_dir_entry_cmp(const void *p1, const void *p2) {
-  const mtpt_dir_entry_t *e1 = p1;
-  const mtpt_dir_entry_t *e2 = p2;
-  return strcmp(e1->name, e2->name);
+  const mtpt_dir_entry_t * const *e1 = p1;
+  const mtpt_dir_entry_t * const *e2 = p2;
+  return strcmp((*e1)->name, (*e2)->name);
 }
 
 static void mtpt_dir_task_child_finished(mtpt_dir_task_t *task) {
@@ -262,7 +262,7 @@ static void mtpt_dir_enter_task_handler(void *arg) {
   }
 
   // read entries into a sorted array
-  entries_size = 256;
+  entries_size = 1;
   entries_count = 0;
   entries = malloc(sizeof(mtpt_dir_entry_t *) * entries_size);
   while((dirp = readdir(d))) {
