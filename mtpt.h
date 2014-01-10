@@ -52,10 +52,82 @@
 #define MTPT_CONFIG_SORT 0x2
 
 /**
- * The type expected for the callback methods.
+ * The type expected for callbacks to use when entering a directory.
+ *
+ * @param arg
+ * The arg parameter that was passed to mtpt().
+ *
+ * @param path
+ * The path of the directory.
+ *
+ * @param st
+ * The stat of the directory.
+ *
+ * @param continuation
+ * Can be used to pass data to the mtpt_dir_exit_method_t callback.
+ *
+ * @return Non-zero if traversal of this directory is desired.
  */
-typedef int (*mtpt_method_t)(void *arg, const char *path,
-                              const struct stat *st);
+typedef int (*mtpt_dir_enter_method_t)(
+  void *arg,
+  const char *path,
+  const struct stat *st,
+  void **continuation
+);
+
+/**
+ * The type expected for callbacks to use when exiting a directory.
+ *
+ * @param arg
+ * The arg parameter that was passed to mtpt().
+ *
+ * @param path
+ * The path of the directory.
+ *
+ * @param st
+ * The stat of the directory.
+ *
+ * @param continuation
+ * Can be used to pass data to the mtpt_dir_exit_method_t callback.
+ *
+ * @param contents
+ * An array of directory contents with relative path names.  Will be sorted
+ * if MTPT_CONFIG_SORT is set in mtpt() options.
+ *
+ * @param contents_count
+ * The number of items in the contents array.
+ *
+ * @return Non-zero if traversal of this directory is desired.
+ */
+typedef void (*mtpt_dir_exit_method_t)(
+  void *arg,
+  const char *path,
+  const struct stat *st,
+  void *continuation,
+  const char **contents,
+  size_t contents_count
+);
+
+/**
+ * The type expected for callbacks to use when visiting a file or when
+ * encountering an error.
+ *
+ * @param arg
+ * The arg parameter that was passed to mtpt().
+ *
+ * @param path
+ * The path of the file.
+ *
+ * @param st
+ * The stat of the file.
+ *
+ * @return Non-zero if traversal of this directory is desired.
+ */
+typedef void (*mtpt_file_method_t)(
+  void *arg,
+  const char *path,
+  const struct stat *st
+);
 
 /**
  * Traverses the file system starting at the given path using multiple
@@ -90,8 +162,15 @@ typedef int (*mtpt_method_t)(void *arg, const char *path,
  *
  * @return 0 if successful, -1 if there was an error and sets errno
  */
-int mtpt(size_t nthreads, int config, const char *path,
-         mtpt_method_t dir_enter_method, mtpt_method_t dir_exit_method,
-         mtpt_method_t file_method, mtpt_method_t error_method, void *arg);
+int mtpt(
+  size_t nthreads,
+  int config,
+  const char *path,
+  mtpt_dir_enter_method_t dir_enter_method,
+  mtpt_dir_exit_method_t dir_exit_method,
+  mtpt_file_method_t file_method,
+  mtpt_file_method_t error_method,
+  void *arg
+);
 
 #endif // MTPT_H

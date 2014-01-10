@@ -47,6 +47,13 @@
 
 #define IO_BUFFER_SIZE (1<<20) // 1 MB
 
+struct traverse_arg {
+  const char *src_root;
+  const char *dst_root;
+  size_t src_root_len;
+  size_t dst_root_len;
+};
+
 struct sync_file_arg {
   struct stat src_st;
   struct stat dst_st;
@@ -151,22 +158,6 @@ static int settimes(const char *path, const struct stat *st, int symlink) {
   if(symlink) return 0;
   return utimes(path, tv);
 #endif
-}
-
-static int traverse_dir_enter(void *arg, const char *path, const struct stat *st) {
-  return 1;
-}
-
-static int traverse_dir_exit(void *arg, const char *path, const struct stat *st) {
-  return 0;
-}
-
-static int traverse_file(void *arg, const char *path, const struct stat *st) {
-  return 0;
-}
-
-static int traverse_error(void *arg, const char *path, const struct stat *st) {
-  return 0;
 }
 
 static void sync_file_task(void *arg) {
@@ -641,10 +632,98 @@ static void sync_dir(
   free(src_contents);
 }
 
+static int traverse_dir_enter(void *arg, const char *src_p, const struct stat *src_st) {
+  traverse_arg *t = arg;
+  const char *p, *rel_p;
+  char dst_p[PATH_MAX];
+
+  p = path + t->src_root_len;
+  strcpy(dst_p, t->dst_root);
+  strcpy(dst_p + t->dst_root_len, p);
+  rel_p = p;
+  while(*p && *p == '/') ++p;
+  if(*p) rel_p = p;
+
+  // stat dst
+  rc = lstat(dst_path, &dst_st);
+  dst_exists = 1;
+  if(rc) {
+    if(errno != ENOENT) {
+      perror(dst_path);
+      g_error = 1;
+      return;
+    }
+    dst_exists = 0;
+  }
+
+  // remove dst if not a directory
+  if(dst_exists && !S_ISDIR(dst_st.st_mode)) {
+    unlink(dst_path);
+    dst_exists = 0;
+  }
+
+  // create dst
+  if(!dst_exists) {
+    rc = mkdir(dst_path, 0700);
+    if(rc && errno != EEXIST) {
+      perror(dst_path);
+      g_error = 1;
+      return;
+    }
+  }
+
+  return 1;
+}
+
+static int traverse_dir_exit(void *arg, const char *src_p, const struct stat *src_st) {
+  traverse_arg *t = arg;
+  const char *p, *rel_p;
+  char dst_p[PATH_MAX];
+
+  p = path + t->src_root_len;
+  strcpy(dst_p, t->dst_root);
+  strcpy(dst_p + t->dst_root_len, p);
+  rel_p = p;
+  while(*p && *p == '/') ++p;
+  if(*p) rel_p = p;
+
+  return 0;
+}
+
+static int traverse_file(void *arg, const char *src_p, const struct stat *src_st) {
+  traverse_arg *t = arg;
+  const char *p, *rel_p;
+  char dst_p[PATH_MAX];
+
+  p = path + t->src_root_len;
+  strcpy(dst_p, t->dst_root);
+  strcpy(dst_p + t->dst_root_len, p);
+  rel_p = p;
+  while(*p && *p == '/') ++p;
+  if(*p) rel_p = p;
+
+  if(S_ISREG(st->st_mode)) {
+    sync_file(src_st, src_p, dst_p, rel_p);
+  } else if(S_ISLNK(st->st_mode)) {
+    sync_symlink(src_st, src_p, dst_p, rel_p);
+  } else {
+    fprintf(stderr, "file type not supported: %s\n", path);
+    g_error = 1;
+  }
+  return 0;
+}
+
+static int traverse_error(void *arg, const char *src_p, const struct stat *src_st) {
+  perror(src_p);
+  g_error = 1;
+  return 0;
+}
+
 int main(int argc, char *argv[]) {
   int rc, opt, threads;
   const char *src_path, *dst_path;
   struct stat src_st;
+  struct traverse_arg t;
 
   threads = 4;
 
@@ -700,7 +779,21 @@ int main(int argc, char *argv[]) {
     exit(2);
   }
 
-  sync_dir(&src_st, src_path, dst_path, "");
+  t.src_root = src_path;
+  t.dst_root = dst_path;
+  t.src_root_len = strlen(src_path);
+  t.dst_root_len = strlen(dst_path);
+  mtpt(
+    threads,
+    MTPT_CONFIG_SORT,
+    src_path,
+    traverse_dir_enter,
+    traverse_dir_exit,
+    traverse_file,
+    traverse_error,
+    &t
+  );
+  //sync_dir(&src_st, src_path, dst_path, "");
 
   // shutdown thread pool
   rc = threadpool_destroy(&g_tp);
