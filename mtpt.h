@@ -51,6 +51,11 @@
  */
 #define MTPT_CONFIG_SORT 0x2
 
+typedef struct mtpt_dir_entry {
+  void *data;
+  char name[0];
+} mtpt_dir_entry_t;
+
 /**
  * The type expected for callbacks to use when entering a directory.
  *
@@ -63,7 +68,7 @@
  * @param st
  * The stat of the directory.
  *
- * @param continuation
+ * @param[out] continuation
  * Can be used to pass data to the mtpt_dir_exit_method_t callback.
  *
  * @return Non-zero if traversal of this directory is desired.
@@ -88,24 +93,25 @@ typedef int (*mtpt_dir_enter_method_t)(
  * The stat of the directory.
  *
  * @param continuation
- * Can be used to pass data to the mtpt_dir_exit_method_t callback.
+ * The pointer that was set in dir_enter_method.
  *
- * @param contents
- * An array of directory contents with relative path names.  Will be sorted
- * if MTPT_CONFIG_SORT is set in mtpt() options.
+ * @param entries
+ * An array of mtpt_dir_entry_t, each containing the file name and data
+ * returned from its traversal, or NULL if it was skipped (dir_enter_method
+ * returned 0).   Will be sorted if MTPT_CONFIG_SORT is set in mtpt() options.
  *
- * @param contents_count
- * The number of items in the contents array.
+ * @param entries_count
+ * The number of items in the entries array.
  *
- * @return Non-zero if traversal of this directory is desired.
+ * @return The data to store in the entry for this directory.
  */
-typedef void (*mtpt_dir_exit_method_t)(
+typedef void * (*mtpt_dir_exit_method_t)(
   void *arg,
   const char *path,
   const struct stat *st,
   void *continuation,
-  const char **contents,
-  size_t contents_count
+  mtpt_dir_entry_t **entries,
+  size_t entries_count
 );
 
 /**
@@ -121,9 +127,9 @@ typedef void (*mtpt_dir_exit_method_t)(
  * @param st
  * The stat of the file.
  *
- * @return Non-zero if traversal of this directory is desired.
+ * @return The data to store in the entry for this file.
  */
-typedef void (*mtpt_file_method_t)(
+typedef void * (*mtpt_file_method_t)(
   void *arg,
   const char *path,
   const struct stat *st
@@ -146,19 +152,20 @@ typedef void (*mtpt_file_method_t)(
  * non-zero if the directory should be traversed.  Can be NULL.
  *
  * @param dir_exit_method
- * The method to call when leaving a directory.  The return value is ignored.
- * Can be NULL.
+ * The method to call when leaving a directory.  Can be NULL.
  *
  * @param file_method
- * The method to call for each file.  The return value is ignored.  Can be
- * NULL.
+ * The method to call for each file.  Can be NULL.
  *
  * @param error_method
- * The method to call for each error.  errno will be set to the appropriate
- * error.  The return value is ignored.  Can be NULL.
+ * The method to call for each error.  The error number will be set in the
+ * errno global variable.  Can be NULL.
  *
  * @param arg
  * The argument to pass to the first parameter of the methods.
+ *
+ * @param data
+ * If not NULL, the data returned from the root path will be stored here.
  *
  * @return 0 if successful, -1 if there was an error and sets errno
  */
@@ -170,7 +177,8 @@ int mtpt(
   mtpt_dir_exit_method_t dir_exit_method,
   mtpt_file_method_t file_method,
   mtpt_file_method_t error_method,
-  void *arg
+  void *arg,
+  void **data
 );
 
 #endif // MTPT_H

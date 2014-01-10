@@ -37,212 +37,360 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 typedef struct mtpt {
   struct threadpool tp;
-  mtpt_method_t dir_enter_method;
-  mtpt_method_t dir_exit_method;
-  mtpt_method_t file_method;
-  mtpt_method_t error_method;
+  mtpt_dir_enter_method_t dir_enter_method;
+  mtpt_dir_exit_method_t dir_exit_method;
+  mtpt_file_method_t file_method;
+  mtpt_file_method_t error_method;
   void *arg;
   int config;
+  size_t spinlock_countdown;
   pthread_mutex_t mutex;
   pthread_cond_t finished;
 } mtpt_t;
 
-typedef struct mtpt_task {
-  mtpt_t *mtpt;
+typedef struct mtpt_dir_task {
   pthread_mutex_t mutex;
-  struct mtpt_task *parent;
+  mtpt_t *mtpt;
+  void **data;
+  struct mtpt_dir_task *parent;
+  void *continuation;
+  mtpt_dir_entry_t **entries;
+  size_t entries_count;
   size_t children;
-  int visited;
   struct stat st;
   char path[0];
-} mtpt_task_t;
+} mtpt_dir_task_t;
 
-static mtpt_task_t * mtpt_task_new(const char *path) {
-  mtpt_task_t *task;
-  int rc;
+typedef struct mtpt_file_task {
+  mtpt_t *mtpt;
+  void **data;
+  struct mtpt_dir_task *parent;
+  struct stat st;
+  char path[0];
+} mtpt_file_task_t;
 
-  task = malloc(sizeof(mtpt_task_t) + strlen(path) + 1);
+static void mtpt_dir_exit_task_handler(void *arg);
+
+static mtpt_file_task_t * mtpt_file_task_new(const char *path) {
+  mtpt_file_task_t *task;
+
+  task = malloc(sizeof(mtpt_file_task_t) + strlen(path) + 1);
   if(!task) return NULL;
-  rc = pthread_mutex_init(&task->mutex, NULL);
-  if(rc) {
-    errno = rc;
-    free(task);
-    return NULL;
-  }
   strcpy(task->path, path);
   return task;
 }
 
-static void mtpt_task_delete(mtpt_task_t *task) {
+static mtpt_dir_task_t * mtpt_dir_task_new(const char *path) {
+  mtpt_dir_task_t *task;
+  int rc;
+
+  task = malloc(sizeof(mtpt_dir_task_t) + strlen(path) + 1);
+  if(!task) return NULL;
+  rc = pthread_mutex_init(&task->mutex, NULL);
+  if(rc) {
+    free(task);
+    errno = rc;
+    return NULL;
+  }
+  task->continuation = NULL;
+  task->entries = NULL;
+  task->entries_count = 0;
+  task->children = 0;
+  strcpy(task->path, path);
+  return task;
+}
+
+static void mtpt_dir_task_delete(mtpt_dir_task_t *task) {
+  size_t i;
+
   pthread_mutex_destroy(&task->mutex);
+  if(task->entries) {
+    for(i = 0; i < task->entries_count; ++i) {
+      free(task->entries[i]);
+    }
+    free(task->entries);
+  }
   free(task);
 }
 
-static int cmpstringp(const void *p1, const void *p2) {
-  return strcmp(*(char * const *) p1, *(char * const *) p2);
+static mtpt_dir_entry_t * mtpt_dir_entry_new(const char *name) {
+  mtpt_dir_entry_t *entry = malloc(sizeof(mtpt_dir_entry_t) + strlen(name) + 1);
+  if(!entry) return NULL;
+  entry->data = NULL;
+  strcpy(entry->name, name);
+  return entry;
 }
 
-static void task_handler(void *arg) {
-  mtpt_task_t *task = arg;
+static int mtpt_dir_entry_cmp(const void *p1, const void *p2) {
+  const mtpt_dir_entry_t *e1 = p1;
+  const mtpt_dir_entry_t *e2 = p2;
+  return strcmp(e1->name, e2->name);
+}
+
+static void mtpt_dir_task_child_finished(mtpt_dir_task_t *task) {
   mtpt_t *mtpt = task->mtpt;
-  DIR *d;
-  struct dirent *dirp;
   int rc;
 
   pthread_mutex_lock(&task->mutex);
-  if(S_ISDIR(task->st.st_mode)) {
-    if(task->visited) {
-      if(mtpt->dir_exit_method)
-        (*mtpt->dir_exit_method)(mtpt->arg, task->path, &task->st);
-    } else {
-      rc = 1;
-      if(mtpt->dir_enter_method)
-        rc = (*mtpt->dir_enter_method)(mtpt->arg, task->path, &task->st);
-      if(rc) {
-        d = opendir(task->path);
-        if(!d) {
-          if(mtpt->error_method)
-            (*mtpt->error_method)(mtpt->arg, task->path, &task->st);
-        } else {
-          char *p;
-          char **contents;
-          size_t contents_size, contents_count, i;
-
-          // read contents into a sorted array
-          contents_size = 256;
-          contents_count = 0;
-          contents = malloc(sizeof(char *) * contents_size);
-          while((dirp = readdir(d))) {
-            if(strcmp(dirp->d_name, ".") == 0 || strcmp(dirp->d_name, "..") == 0)
-              continue;
-            p = malloc(strlen(dirp->d_name)+1);
-            strcpy(p, dirp->d_name);
-            contents[contents_count] = p;
-            if(++contents_count == contents_size) {
-              contents_size <<= 1;
-              contents = realloc(contents, sizeof(char *) * contents_size);
-            }
-          }
-          closedir(d);
-          if(mtpt->config & MTPT_CONFIG_SORT)
-            qsort(contents, contents_count, sizeof(char *), cmpstringp);
-
-          // loop through contents
-          for(i = 0; i < contents_count; ++i) {
-            struct stat st;
-            char path[PATH_MAX];
-
-            p = contents[i];
-            snprintf(path, PATH_MAX, "%s/%s", task->path, p);
-            rc = lstat(path, &st);
-            if(rc) {
-              if(errno != ENOENT) {
-                if(mtpt->error_method)
-                  (*mtpt->error_method)(mtpt->arg, path, NULL);
-              }
-              continue;
-            }
-
-            if(S_ISDIR(st.st_mode) || mtpt->config & MTPT_CONFIG_FILE_TASKS) {
-              mtpt_task_t *t = mtpt_task_new(path);
-              t->mtpt = mtpt;
-              t->parent = task;
-              t->children = 0;
-              t->visited = 0;
-              t->st = st;
-              rc = threadpool_add(&mtpt->tp, task_handler, t);
-              if(rc) {
-                errno = rc;
-                if(mtpt->error_method)
-                  (*mtpt->error_method)(mtpt->arg, path, &st);
-                mtpt_task_delete(t);
-              } else {
-                ++task->children;
-              }
-            } else {
-              if(mtpt->file_method)
-                (*mtpt->file_method)(mtpt->arg, path, &st);
-            }
-          }
-
-          // free contents
-          for(i = 0; i < contents_count; ++i) {
-            p = contents[i];
-            free(p);
-          }
-          free(contents);
-        }
+  if(--task->children == 0) {
+    rc = threadpool_add(&mtpt->tp, mtpt_dir_exit_task_handler, task);
+    if(rc) {
+      /* 
+       * Getting here is bad.  This task has no more children and needs to be
+       * put back in the queue so that its dir_exit_method can be run, but
+       * there's not enough resources to add it back to the queue.  This will
+       * have a cascading effect back up to the root task, and since the main
+       * thread is blocked waiting on it to finish, this will lead to deadlock.
+       *
+       * To try and avoid this situation, print an error message and keep
+       * trying to re-add this task's parent to the queue (a spinlock of
+       * sorts).  It is possible that all threads end up at this point, at
+       * which point we'd have a livelock on our hands.
+       *
+       * The livelock can be detected by keeping track of how many threads are
+       * in this spinlock.  When livelock happens, our only choice is to abort
+       * the process.
+       */
+      pthread_mutex_lock(&mtpt->mutex);
+      if(--mtpt->spinlock_countdown == 0) {
+        fprintf(stderr, "All threads have reached spinlock. Aborting.\n");
+        abort();
       }
-      if(task->children == 0) {
-        if(mtpt->dir_exit_method)
-          (*mtpt->dir_exit_method)(mtpt->arg, task->path, &task->st);
-      } else {
-        task->visited = 1;
-        pthread_mutex_unlock(&task->mutex);
-        return;
-      }
+      fprintf(stderr,
+        "Cannot requeue %s for processing because %s. Will keep trying.\n",
+        task->path,
+        strerror(rc)
+      );
+      pthread_mutex_unlock(&mtpt->mutex);
+      do {
+        sleep(1); // so we don't chew up the CPU
+        rc = threadpool_add(&mtpt->tp, mtpt_dir_exit_task_handler, task);
+      } while(rc);
+      pthread_mutex_lock(&mtpt->mutex);
+      ++mtpt->spinlock_countdown;
+      pthread_mutex_unlock(&mtpt->mutex);
     }
-  } else {
-    if(mtpt->file_method)
-      (*mtpt->file_method)(mtpt->arg, task->path, &task->st);
   }
+  pthread_mutex_unlock(&task->mutex);
+}
 
+static void mtpt_file_task_handler(void *arg) {
+  mtpt_file_task_t *task = arg;
+  mtpt_t *mtpt = task->mtpt;
+  void *data;
+
+  if(mtpt->file_method) {
+    data = (*mtpt->file_method)(mtpt->arg, task->path, &task->st);
+    if(task->data) *task->data = data;
+  }
   if(task->parent) {
-    pthread_mutex_lock(&task->parent->mutex);
-    if(--task->parent->children == 0) {
-      rc = threadpool_add(&mtpt->tp, task_handler, task->parent);
-      if(rc) {
-        errno = rc;
-        if(mtpt->error_method)
-          (*mtpt->error_method)(mtpt->arg, task->parent->path, &task->parent->st);
-        pthread_mutex_unlock(&task->parent->mutex);
-        mtpt_task_delete(task->parent);
-      }
-    }
-    pthread_mutex_unlock(&task->parent->mutex);
+    // let my parent know that I'm finished
+    mtpt_dir_task_child_finished(task->parent);
   } else {
     // the root task is finished
     pthread_mutex_lock(&mtpt->mutex);
     pthread_cond_signal(&mtpt->finished);
     pthread_mutex_unlock(&mtpt->mutex);
   }
+  free(task);
+}
+
+static void mtpt_dir_exit_task_handler(void *arg) {
+  mtpt_dir_task_t *task = arg;
+  mtpt_t *mtpt = task->mtpt;
+  void *data;
+
+  // wait until mtpt_dir_task_child_finished() is done with me
+  pthread_mutex_lock(&task->mutex);
   pthread_mutex_unlock(&task->mutex);
-  mtpt_task_delete(task);
+
+  if(mtpt->dir_exit_method) {
+    data = (*mtpt->dir_exit_method)(
+      mtpt->arg,
+      task->path,
+      &task->st,
+      task->continuation,
+      task->entries,
+      task->entries_count
+    );
+    if(task->data) *task->data = data;
+  }
+  if(task->parent) {
+    // let my parent know that I'm finished
+    mtpt_dir_task_child_finished(task->parent);
+  } else {
+    // the root task is finished
+    pthread_mutex_lock(&mtpt->mutex);
+    pthread_cond_signal(&mtpt->finished);
+    pthread_mutex_unlock(&mtpt->mutex);
+  }
+  mtpt_dir_task_delete(task);
+}
+
+static void mtpt_dir_enter_task_handler(void *arg) {
+  mtpt_dir_task_t *task = arg;
+  mtpt_t *mtpt = task->mtpt;
+  DIR *d;
+  void *data;
+  struct dirent *dirp;
+  mtpt_dir_entry_t *entry;
+  mtpt_dir_entry_t **entries;
+  size_t entries_size, entries_count, i;
+  int rc, no_children;
+
+  if(mtpt->dir_enter_method) {
+    rc = (*mtpt->dir_enter_method)(mtpt->arg, task->path, &task->st, &task->continuation);
+    if(!rc) {
+      mtpt_dir_exit_task_handler(task);
+      return;
+    }
+  }
+
+  // open the directory
+  d = opendir(task->path);
+  if(!d) {
+    if(mtpt->error_method) {
+      data = (*mtpt->error_method)(mtpt->arg, task->path, &task->st);
+      if(task->data) *task->data = data;
+    }
+    mtpt_dir_task_delete(task);
+    return;
+  }
+
+  // read entries into a sorted array
+  entries_size = 256;
+  entries_count = 0;
+  entries = malloc(sizeof(mtpt_dir_entry_t *) * entries_size);
+  while((dirp = readdir(d))) {
+    if(strcmp(dirp->d_name, ".") == 0 || strcmp(dirp->d_name, "..") == 0)
+      continue;
+    entries[entries_count] = mtpt_dir_entry_new(dirp->d_name);
+    if(++entries_count == entries_size) {
+      entries_size <<= 1;
+      entries = realloc(entries, sizeof(char *) * entries_size);
+    }
+  }
+  closedir(d);
+  if(mtpt->config & MTPT_CONFIG_SORT) {
+    qsort(entries, entries_count, sizeof(mtpt_dir_entry_t *), mtpt_dir_entry_cmp);
+  }
+  task->entries = entries;
+  task->entries_count = entries_count;
+
+  // loop through entries
+  no_children = 1;
+  pthread_mutex_lock(&task->mutex);
+  for(i = 0; i < entries_count; ++i) {
+    struct stat st;
+    char path[PATH_MAX];
+
+    entry = entries[i];
+    snprintf(path, PATH_MAX, "%s/%s", task->path, entry->name);
+    rc = lstat(path, &st);
+    if(rc) {
+      if(errno != ENOENT) {
+        if(mtpt->error_method) {
+          data = (*mtpt->error_method)(mtpt->arg, path, NULL);
+          if(task->data) *task->data = data;
+        }
+      }
+      continue;
+    }
+
+    if(S_ISDIR(st.st_mode)) {
+      mtpt_dir_task_t *t = mtpt_dir_task_new(path);
+      t->mtpt = mtpt;
+      t->data = &entry->data;
+      t->parent = task;
+      t->st = st;
+      rc = threadpool_add(&mtpt->tp, mtpt_dir_enter_task_handler, t);
+      if(rc) {
+        errno = rc;
+        if(mtpt->error_method) {
+          data = (*mtpt->error_method)(mtpt->arg, path, &st);
+          if(task->data) *task->data = data;
+        }
+        mtpt_dir_task_delete(t);
+      } else {
+        ++task->children;
+        no_children = 0;
+      }
+    } else if(mtpt->config & MTPT_CONFIG_FILE_TASKS) {
+      mtpt_file_task_t *t = mtpt_file_task_new(path);
+      t->mtpt = mtpt;
+      t->data = &entry->data;
+      t->parent = task;
+      t->st = st;
+      rc = threadpool_add(&mtpt->tp, mtpt_file_task_handler, t);
+      if(rc) {
+        errno = rc;
+        if(mtpt->error_method) {
+          data = (*mtpt->error_method)(mtpt->arg, path, &st);
+          if(task->data) *task->data = data;
+        }
+        free(t);
+      } else {
+        ++task->children;
+        no_children = 0;
+      }
+    } else {
+      if(mtpt->file_method) {
+        data = (*mtpt->file_method)(mtpt->arg, path, &st);
+        if(task->data) *task->data = data;
+      }
+    }
+  }
+  pthread_mutex_unlock(&task->mutex);
+
+  if(no_children) {
+    mtpt_dir_exit_task_handler(task);
+  }
 }
 
 int mtpt(
   size_t nthreads,
   int config,
   const char *path,
-  mtpt_method_t dir_enter_method,
-  mtpt_method_t dir_exit_method,
-  mtpt_method_t file_method,
-  mtpt_method_t error_method,
-  void *arg
+  mtpt_dir_enter_method_t dir_enter_method,
+  mtpt_dir_exit_method_t dir_exit_method,
+  mtpt_file_method_t file_method,
+  mtpt_file_method_t error_method,
+  void *arg,
+  void **data
 ) {
   mtpt_t mtpt;
-  mtpt_task_t *task;
+  struct stat st;
+  void *d;
+  mtpt_dir_task_t *root_task;
   int rc;
 
-  // create task for path
-  task = mtpt_task_new(path);
-  if(task == NULL) return -1;
-  task->mtpt = &mtpt;
-  task->parent = NULL;
-  task->children = 0;
-  task->visited = 0;
-
   // stat path
-  rc = stat(path, &task->st);
+  rc = stat(path, &st);
   if(rc) return -1;
+
+  // if the root path is not a directory, just handle it in this thread
+  if(!S_ISDIR(st.st_mode)) {
+    d = (*file_method)(arg, path, &st);
+    if(data) *data = d;
+    return 0;
+  }
+
+  // create task for root path
+  root_task = mtpt_dir_task_new(path);
+  if(root_task == NULL) return -1;
+  root_task->mtpt = &mtpt;
+  root_task->data = data;
+  root_task->parent = NULL;
+  root_task->st = st;
 
   // initialize the mtpt structure
   rc = threadpool_init(&mtpt.tp, nthreads, 0);
   if(rc) {
-    mtpt_task_delete(task);
+    mtpt_dir_task_delete(root_task);
     errno = rc;
     return -1;
   }
@@ -252,14 +400,15 @@ int mtpt(
   mtpt.error_method = error_method;
   mtpt.arg = arg;
   mtpt.config = config;
+  mtpt.spinlock_countdown = nthreads;
   pthread_mutex_init(&mtpt.mutex, NULL);
   pthread_cond_init(&mtpt.finished, NULL);
 
   // 3...2...1...GO!
-  rc = threadpool_add(&mtpt.tp, task_handler, task);
+  rc = threadpool_add(&mtpt.tp, mtpt_dir_enter_task_handler, root_task);
   if(rc) {
     threadpool_destroy(&mtpt.tp);
-    mtpt_task_delete(task);
+    mtpt_dir_task_delete(root_task);
     errno = rc;
     return -1;
   }
