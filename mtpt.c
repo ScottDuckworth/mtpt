@@ -44,7 +44,7 @@ typedef struct mtpt {
   mtpt_dir_enter_method_t dir_enter_method;
   mtpt_dir_exit_method_t dir_exit_method;
   mtpt_file_method_t file_method;
-  mtpt_file_method_t error_method;
+  mtpt_error_method_t error_method;
   void *arg;
   int config;
   size_t spinlock_countdown;
@@ -254,7 +254,7 @@ static void mtpt_dir_enter_task_handler(void *arg) {
   d = opendir(task->path);
   if(!d) {
     if(mtpt->error_method) {
-      data = (*mtpt->error_method)(mtpt->arg, task->path, &task->st);
+      data = (*mtpt->error_method)(mtpt->arg, task->path, &task->st, task->continuation);
       if(task->data) *task->data = data;
     }
     mtpt_dir_task_delete(task);
@@ -294,7 +294,7 @@ static void mtpt_dir_enter_task_handler(void *arg) {
     if(rc) {
       if(errno != ENOENT) {
         if(mtpt->error_method) {
-          data = (*mtpt->error_method)(mtpt->arg, path, NULL);
+          data = (*mtpt->error_method)(mtpt->arg, path, NULL, NULL);
           if(task->data) *task->data = data;
         }
       }
@@ -311,7 +311,7 @@ static void mtpt_dir_enter_task_handler(void *arg) {
       if(rc) {
         errno = rc;
         if(mtpt->error_method) {
-          data = (*mtpt->error_method)(mtpt->arg, path, &st);
+          data = (*mtpt->error_method)(mtpt->arg, path, &st, NULL);
           if(task->data) *task->data = data;
         }
         mtpt_dir_task_delete(t);
@@ -329,7 +329,7 @@ static void mtpt_dir_enter_task_handler(void *arg) {
       if(rc) {
         errno = rc;
         if(mtpt->error_method) {
-          data = (*mtpt->error_method)(mtpt->arg, path, &st);
+          data = (*mtpt->error_method)(mtpt->arg, path, &st, NULL);
           if(task->data) *task->data = data;
         }
         free(t);
@@ -358,7 +358,7 @@ int mtpt(
   mtpt_dir_enter_method_t dir_enter_method,
   mtpt_dir_exit_method_t dir_exit_method,
   mtpt_file_method_t file_method,
-  mtpt_file_method_t error_method,
+  mtpt_error_method_t error_method,
   void *arg,
   void **data
 ) {

@@ -115,8 +115,7 @@ typedef void * (*mtpt_dir_exit_method_t)(
 );
 
 /**
- * The type expected for callbacks to use when visiting a file or when
- * encountering an error.
+ * The type expected for callbacks to use when visiting a file.
  *
  * @param arg
  * The arg parameter that was passed to mtpt().
@@ -133,6 +132,32 @@ typedef void * (*mtpt_file_method_t)(
   void *arg,
   const char *path,
   const struct stat *st
+);
+
+/**
+ * The type expected for callbacks to use when encountering an error.
+ *
+ * @param arg
+ * The arg parameter that was passed to mtpt().
+ *
+ * @param path
+ * The path of the file.
+ *
+ * @param st
+ * The stat of the file.
+ *
+ * @param continuation
+ * If this is a directory that has already gone through mtpt_dir_enter_method_t
+ * then this will be the continuation that was set in that method.  Otherwise,
+ * it will be NULL.
+ *
+ * @return The data to store in the entry for this file.
+ */
+typedef void * (*mtpt_error_method_t)(
+  void *arg,
+  const char *path,
+  const struct stat *st,
+  void *continuation
 );
 
 /**
@@ -176,7 +201,7 @@ int mtpt(
   mtpt_dir_enter_method_t dir_enter_method,
   mtpt_dir_exit_method_t dir_exit_method,
   mtpt_file_method_t file_method,
-  mtpt_file_method_t error_method,
+  mtpt_error_method_t error_method,
   void *arg,
   void **data
 );

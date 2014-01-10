@@ -29,7 +29,7 @@ static void * file(void *arg, const char *path, const struct stat *st) {
   return NULL;
 }
 
-static void * error(void *arg, const char *path, const struct stat *st) {
+static void * error(void *arg, const char *path, const struct stat *st, void *continuation) {
   perror(path);
   if(st) fprintf(stderr, "%o\n", st->st_mode);
   return NULL;
@@ -39,7 +39,7 @@ int main(int argc, char **argv) {
   int rc;
   rc = mtpt(
     4,         // nthreads
-    MTPT_CONFIG_FILE_TASKS, // config
+    MTPT_CONFIG_FILE_TASKS | MTPT_CONFIG_SORT, // config
     argv[1],   // path
     dir_enter, // dir_enter_method
     dir_exit,  // dir_exit_method
