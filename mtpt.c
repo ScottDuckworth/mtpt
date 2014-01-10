@@ -262,7 +262,7 @@ static void mtpt_dir_enter_task_handler(void *arg) {
   }
 
   // read entries into a sorted array
-  entries_size = 1;
+  entries_size = 256;
   entries_count = 0;
   entries = malloc(sizeof(mtpt_dir_entry_t *) * entries_size);
   while((dirp = readdir(d))) {
