@@ -126,12 +126,6 @@ static mtpt_dir_entry_t * mtpt_dir_entry_new(const char *name) {
   return entry;
 }
 
-static int mtpt_dir_entry_cmp(const void *p1, const void *p2) {
-  const mtpt_dir_entry_t * const *e1 = p1;
-  const mtpt_dir_entry_t * const *e2 = p2;
-  return strcmp((*e1)->name, (*e2)->name);
-}
-
 static void mtpt_dir_task_child_finished(mtpt_dir_task_t *task) {
   mtpt_t *mtpt = task->mtpt;
   int rc;
@@ -277,7 +271,7 @@ static void mtpt_dir_enter_task_handler(void *arg) {
   }
   closedir(d);
   if(mtpt->config & MTPT_CONFIG_SORT) {
-    qsort(entries, entries_count, sizeof(mtpt_dir_entry_t *), mtpt_dir_entry_cmp);
+    qsort(entries, entries_count, sizeof(mtpt_dir_entry_t *), mtpt_dir_entry_pcmp);
   }
   task->entries = entries;
   task->entries_count = entries_count;
@@ -423,4 +417,10 @@ int mtpt(
   threadpool_destroy(&mtpt.tp);
 
   return 0;
+}
+
+int mtpt_dir_entry_pcmp(const void *p1, const void *p2) {
+  const mtpt_dir_entry_t * const *e1 = p1;
+  const mtpt_dir_entry_t * const *e2 = p2;
+  return strcmp((*e1)->name, (*e2)->name);
 }
