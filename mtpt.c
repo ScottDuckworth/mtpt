@@ -33,6 +33,7 @@
 #include <pthread.h>
 #include <dirent.h>
 #include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -62,7 +63,7 @@ typedef struct mtpt_dir_task {
   size_t entries_count;
   size_t children;
   struct stat st;
-  char path[0];
+  char path[1];
 } mtpt_dir_task_t;
 
 typedef struct mtpt_file_task {
@@ -70,7 +71,7 @@ typedef struct mtpt_file_task {
   void **data;
   struct mtpt_dir_task *parent;
   struct stat st;
-  char path[0];
+  char path[1];
 } mtpt_file_task_t;
 
 static void mtpt_dir_exit_task_handler(void *arg);
@@ -78,7 +79,7 @@ static void mtpt_dir_exit_task_handler(void *arg);
 static mtpt_file_task_t * mtpt_file_task_new(const char *path) {
   mtpt_file_task_t *task;
 
-  task = malloc(sizeof(mtpt_file_task_t) + strlen(path) + 1);
+  task = malloc(sizeof(mtpt_file_task_t) + strlen(path));
   if(!task) return NULL;
   strcpy(task->path, path);
   return task;
@@ -88,7 +89,7 @@ static mtpt_dir_task_t * mtpt_dir_task_new(const char *path) {
   mtpt_dir_task_t *task;
   int rc;
 
-  task = malloc(sizeof(mtpt_dir_task_t) + strlen(path) + 1);
+  task = malloc(sizeof(mtpt_dir_task_t) + strlen(path));
   if(!task) return NULL;
   rc = pthread_mutex_init(&task->mutex, NULL);
   if(rc) {
@@ -118,7 +119,7 @@ static void mtpt_dir_task_delete(mtpt_dir_task_t *task) {
 }
 
 static mtpt_dir_entry_t * mtpt_dir_entry_new(const char *name) {
-  mtpt_dir_entry_t *entry = malloc(sizeof(mtpt_dir_entry_t) + strlen(name) + 1);
+  mtpt_dir_entry_t *entry = malloc(sizeof(mtpt_dir_entry_t) + strlen(name));
   if(!entry) return NULL;
   entry->data = NULL;
   strcpy(entry->name, name);

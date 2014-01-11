@@ -53,7 +53,7 @@
 
 typedef struct mtpt_dir_entry {
   void *data;
-  char name[0];
+  char name[1];
 } mtpt_dir_entry_t;
 
 /**
