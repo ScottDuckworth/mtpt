@@ -53,16 +53,12 @@ struct traverse_arg {
   size_t dst_root_len;
 };
 
-struct sync_file_arg {
-  struct stat src_st;
-  struct stat dst_st;
+struct traverse_continuation {
   int dst_exists;
-  int dst_fd;
-  char src[PATH_MAX];
-  char dst[PATH_MAX];
+  struct stat dst_st;
+  struct stat src_st;
 };
 
-static struct threadpool g_tp;
 static int g_error = 0;
 static int g_verbose = 0;
 static int g_delete = 1;
@@ -112,10 +108,14 @@ static void unlink_dir(const char *path) {
       continue;
     }
     if(S_ISDIR(st.st_mode)) {
+#ifdef _DIRENT_HAVE_D_TYPE
     delete_dir:
+#endif
       unlink_dir(p);
     } else {
+#ifdef _DIRENT_HAVE_D_TYPE
     delete_other:
+#endif
       unlink(p);
     }
   }
@@ -125,10 +125,6 @@ static void unlink_dir(const char *path) {
     perror(path);
     g_error = 1;
   }
-}
-
-static int cmpstringp(const void *p1, const void *p2) {
-  return strcmp(*(char * const *) p1, *(char * const *) p2);
 }
 
 static inline int samemtime(const struct stat *a, const struct stat *b) {
@@ -157,97 +153,6 @@ static int settimes(const char *path, const struct stat *st, int symlink) {
   if(symlink) return 0;
   return utimes(path, tv);
 #endif
-}
-
-static void sync_file_task(void *arg) {
-  struct sync_file_arg *task = arg;
-  ssize_t a, b, c;
-  off_t length;
-  int src_fd, rc;
-  char buf[IO_BUFFER_SIZE];
-
-  // open src for reading
-  src_fd = open(task->src, O_RDONLY);
-  if(src_fd == -1) {
-    perror(task->src);
-    g_error = 1;
-    goto err1;
-  }
-
-  // copy the data
-  length = 0;
-  while(1) {
-    a = read(src_fd, buf, sizeof(buf));
-    if(a == -1) {
-      // read error
-      perror(task->src);
-      g_error = 1;
-      goto err2;
-    } else if(a == 0) {
-      // end of file
-      break;
-    } else {
-      c = 0;
-      length += a;
-      do {
-        b = write(task->dst_fd, buf + c, a - c);
-        if(b == -1) {
-          // write error
-          perror(task->dst);
-          g_error = 1;
-          goto err2;
-        } else {
-          c += b;
-        }
-      } while(c < a);
-    }
-  }
-  rc = ftruncate(task->dst_fd, length);
-  if(rc) {
-    perror(task->dst);
-    g_error = 1;
-  }
-
-  // set mode
-  if(!task->dst_exists ||
-     task->src_st.st_mode != task->dst_st.st_mode
-  ) {
-    rc = fchmod(task->dst_fd, task->src_st.st_mode);
-    if(rc) {
-      perror(task->dst);
-      g_error = 1;
-    }
-  }
-
-  // set uid and gid
-  if(!task->dst_exists ||
-     task->src_st.st_uid != task->dst_st.st_uid ||
-     task->src_st.st_gid != task->dst_st.st_gid
-  ) {
-    rc = fchown(task->dst_fd, task->src_st.st_uid, task->src_st.st_gid);
-    if(rc) {
-      perror(task->dst);
-      g_error = 1;
-    }
-  }
-  close(src_fd);
-  close(task->dst_fd);
-
-  // set mtime
-  rc = settimes(task->dst, &task->src_st, 0);
-  if(rc) {
-    perror(task->dst);
-    g_error = 1;
-  }
-
-  free(task);
-  return;
-
-err2:
-  close(src_fd);
-err1:
-  close(task->dst_fd);
-  free(task);
 }
 
 static void sync_file(
@@ -285,26 +190,105 @@ static void sync_file(
      src_st->st_size != dst_st.st_size ||
      !samemtime(src_st, &dst_st)
   ) { // dst does not exist or file size or mtime differ
-    struct sync_file_arg *task;
-    int dst_fd;
+    ssize_t a, b, c;
+    off_t length;
+    int src_fd, dst_fd;
+    char buf[IO_BUFFER_SIZE];
+
+    // open src for reading
+    src_fd = open(src_path, O_RDONLY);
+    if(src_fd == -1) {
+      perror(src_path);
+      g_error = 1;
+      return;
+    }
 
     // open dst for writing
     dst_fd = open(dst_path, O_WRONLY | O_CREAT, 0600);
     if(dst_fd == -1) {
       perror(dst_path);
       g_error = 1;
+      close(src_fd);
       return;
     }
 
-    if(g_verbose) printf("%s\n", rel_path);
-    task = malloc(sizeof(struct sync_file_arg));
-    task->src_st = *src_st;
-    task->dst_st = dst_st;
-    task->dst_exists = dst_exists;
-    task->dst_fd = dst_fd;
-    strcpy(task->src, src_path);
-    strcpy(task->dst, dst_path);
-    threadpool_add(&g_tp, sync_file_task, task);
+    // copy the data
+    length = 0;
+    while(1) {
+      a = read(src_fd, buf, sizeof(buf));
+      if(a == -1) {
+        // read error
+        perror(src_path);
+        g_error = 1;
+        close(src_fd);
+        close(dst_fd);
+        return;
+      } else if(a == 0) {
+        // end of file
+        break;
+      } else {
+        c = 0;
+        length += a;
+        do {
+          b = write(dst_fd, buf + c, a - c);
+          if(b == -1) {
+            // write error
+            perror(dst_path);
+            g_error = 1;
+            close(src_fd);
+            close(dst_fd);
+            return;
+          } else {
+            c += b;
+          }
+        } while(c < a);
+      }
+    }
+    close(src_fd);
+    rc = ftruncate(dst_fd, length);
+    if(rc) {
+      perror(dst_path);
+      g_error = 1;
+      close(dst_fd);
+      return;
+    }
+
+    // set mode
+    if(!dst_exists ||
+       src_st->st_mode != dst_st.st_mode
+    ) {
+      rc = fchmod(dst_fd, src_st->st_mode);
+      if(rc) {
+        perror(dst_path);
+        g_error = 1;
+        close(dst_fd);
+        return;
+      }
+    }
+
+    // set uid and gid
+    if(!dst_exists ||
+       src_st->st_uid != dst_st.st_uid ||
+       src_st->st_gid != dst_st.st_gid
+    ) {
+      rc = fchown(dst_fd, src_st->st_uid, src_st->st_gid);
+      if(rc) {
+        perror(dst_path);
+        g_error = 1;
+        close(dst_fd);
+        return;
+      }
+    }
+
+    close(dst_fd);
+
+    // set mtime
+    rc = settimes(dst_path, src_st, 0);
+    if(rc) {
+      perror(dst_path);
+      g_error = 1;
+      return;
+    }
   } else { // file size and mtime are the same
     // set mode
     if(src_st->st_mode != dst_st.st_mode) {
@@ -324,6 +308,7 @@ static void sync_file(
       if(rc) {
         perror(dst_path);
         g_error = 1;
+        return;
       }
     }
   }
@@ -388,6 +373,7 @@ static void sync_symlink(
         if(rc && errno != ENOENT) {
           perror(dst_path);
           g_error = 1;
+          return;
         }
       }
       dst_exists = 0;
@@ -421,6 +407,7 @@ static void sync_symlink(
     if(rc) {
       perror(dst_path);
       g_error = 1;
+      return;
     }
   }
 
@@ -429,28 +416,29 @@ static void sync_symlink(
   if(rc) {
     perror(dst_path);
     g_error = 1;
+    return;
   }
 }
 
-static void sync_dir(
-  const struct stat *src_st,
+static int traverse_dir_enter(
+  void *arg,
   const char *src_path,
-  const char *dst_path,
-  const char *rel_path
+  const struct stat *src_st,
+  void **continuation
 ) {
+  struct traverse_arg *t = arg;
+  struct traverse_continuation *cont;
+  const char *p, *rel_path;
   int rc, dst_exists;
-  struct stat dst_st, content_st;
-  DIR *d;
-  char *p;
-  struct dirent *dirp;
-  char **src_contents;
-  size_t src_contents_size, src_contents_count, i;
-  unsigned int src_len;
-  unsigned int dst_len;
-  unsigned int rel_len;
-  char src_p[PATH_MAX];
-  char dst_p[PATH_MAX];
-  char rel_p[PATH_MAX];
+  struct stat dst_st;
+  char dst_path[PATH_MAX];
+
+  p = src_path + t->src_root_len;
+  strcpy(dst_path, t->dst_root);
+  strcpy(dst_path + t->dst_root_len, p);
+  rel_path = p;
+  while(*p && *p == '/') ++p;
+  if(*p) rel_path = p;
 
   // stat dst
   rc = lstat(dst_path, &dst_st);
@@ -459,7 +447,7 @@ static void sync_dir(
     if(errno != ENOENT) {
       perror(dst_path);
       g_error = 1;
-      return;
+      return 0;
     }
     dst_exists = 0;
   }
@@ -476,143 +464,124 @@ static void sync_dir(
     if(rc && errno != EEXIST) {
       perror(dst_path);
       g_error = 1;
-      return;
+      return 0;
     }
   }
 
-  // read src contents into a sorted array
-  d = opendir(src_path);
-  if(!d) {
-    perror(src_path);
-    g_error = 1;
-    return;
-  }
-  src_contents_size = 256;
-  src_contents_count = 0;
-  src_contents = malloc(sizeof(char *) * src_contents_size);
-  while((dirp = readdir(d))) {
-    if(strcmp(dirp->d_name, ".") == 0 || strcmp(dirp->d_name, "..") == 0) {
-      continue;
-    }
-    p = malloc(strlen(dirp->d_name)+1);
-    strcpy(p, dirp->d_name);
-    src_contents[src_contents_count] = p;
-    if(++src_contents_count == src_contents_size) {
-      src_contents_size <<= 1;
-      src_contents = realloc(src_contents, sizeof(char *) * src_contents_size);
-    }
-  }
-  closedir(d);
-  qsort(src_contents, src_contents_count, sizeof(char *), cmpstringp);
+  cont = malloc(sizeof(struct traverse_continuation));
+  cont->dst_exists = dst_exists;
+  cont->dst_st = dst_st;
+  cont->src_st = *src_st;
+  *continuation = cont;
 
-  src_len = strlen(src_path);
-  strcpy(src_p, src_path);
-  src_p[src_len++] = '/';
-  dst_len = strlen(dst_path);
-  strcpy(dst_p, dst_path);
-  dst_p[dst_len++] = '/';
-  rel_len = strlen(rel_path);
-  strcpy(rel_p, rel_path);
+  return 1;
+}
 
-  // loop through src contents
-  for(i = 0; i < src_contents_count; ++i) {
-    p = src_contents[i];
-    strncpy(src_p + src_len, p, PATH_MAX - src_len);
-    strncpy(dst_p + dst_len, p, PATH_MAX - dst_len);
+static void * traverse_dir_exit(
+  void *arg,
+  const char *src_path,
+  const struct stat *src_st,
+  void *continuation,
+  mtpt_dir_entry_t **entries,
+  size_t entries_count
+) {
+  struct traverse_arg *t = arg;
+  struct traverse_continuation *cont = continuation;
+  const char *p, *rel_path;
+  DIR *d;
+  struct dirent *dirp;
+  int rc;
+  struct stat st;
+  char dst_path[PATH_MAX];
+  char dst_p[PATH_MAX];
 
-    // stat src
-    rc = lstat(src_p, &content_st);
-    if(rc) {
-      perror(src_p);
-      g_error = 1;
-      continue;
-    }
+  p = src_path + t->src_root_len;
+  strcpy(dst_path, t->dst_root);
+  strcpy(dst_path + t->dst_root_len, p);
+  rel_path = p;
+  while(*p && *p == '/') ++p;
+  if(*p) rel_path = p;
 
-    if(S_ISDIR(content_st.st_mode)) {
-      unsigned int l = rel_len + strlen(p);
-      strcpy(rel_p + rel_len, p);
-      rel_p[l] = '/';
-      rel_p[l+1] = '\0';
-      sync_dir(&content_st, src_p, dst_p, rel_p);
-    } else if(S_ISREG(content_st.st_mode)) {
-      snprintf(rel_p, PATH_MAX, "%s%s", rel_path, p);
-      sync_file(&content_st, src_p, dst_p, rel_p);
-    } else if(S_ISLNK(content_st.st_mode)) {
-      snprintf(rel_p, PATH_MAX, "%s%s", rel_path, p);
-      sync_symlink(&content_st, src_p, dst_p, rel_p);
-    } else {
-      fprintf(stderr, "file type not supported: %s\n", src_p);
-      g_error = 1;
-    }
+  size_t i;
+  printf("Contents of %s:\n", src_path);
+  for(i = 0; i < entries_count; ++i) {
+    printf("  %s\n", entries[i]->name);
   }
 
-  if(g_delete && dst_exists && !samemtime(src_st, &dst_st)) {
+  if(g_delete && cont->dst_exists && !samemtime(&cont->src_st, &cont->dst_st)) {
     // delete files in dst that are not in src
     d = opendir(dst_path);
     if(!d) {
       perror(dst_path);
       g_error = 1;
-      return;
-    }
-    while((dirp = readdir(d))) {
-      if(strcmp(dirp->d_name, ".") == 0 || strcmp(dirp->d_name, "..") == 0) {
-        continue;
-      }
-      p = dirp->d_name;
-      if(!bsearch(&p, src_contents, src_contents_count, sizeof(char *), cmpstringp)) {
-        snprintf(dst_p, PATH_MAX, "%s/%s", dst_path, p);
-#ifdef _DIRENT_HAVE_D_TYPE
-        switch(dirp->d_type) {
-        case DT_UNKNOWN:
-          break;
-        case DT_DIR:
-          goto delete_dir;
-        default:
-          goto delete_other;
-        }
-#endif
-        rc = lstat(dst_p, &dst_st);
-        if(rc) {
-          if(errno != ENOENT) {
-            perror(dst_p);
-            g_error = 1;
-          }
+    } else {
+      while((dirp = readdir(d))) {
+        if(strcmp(dirp->d_name, ".") == 0 || strcmp(dirp->d_name, "..") == 0) {
           continue;
         }
-        if(S_ISDIR(dst_st.st_mode)) {
-        delete_dir:
-          if(g_verbose) printf("deleting %s\n", dst_p);
-          unlink_dir(dst_p);
-        } else {
-        delete_other:
-          if(g_verbose) printf("deleting %s\n", dst_p);
-          unlink(dst_p);
+        p = dirp->d_name;
+        if(!bsearch(&p, entries, entries_count, sizeof(mtpt_dir_entry_t *), mtpt_dir_entry_pcmp)) {
+          printf("%s not in %s\n", p, src_path);
+          snprintf(dst_p, PATH_MAX, "%s/%s", dst_path, p);
+#ifdef _DIRENT_HAVE_D_TYPE
+          switch(dirp->d_type) {
+          case DT_UNKNOWN:
+            break;
+          case DT_DIR:
+            goto delete_dir;
+          default:
+            goto delete_other;
+          }
+#endif
+          rc = lstat(dst_p, &st);
+          if(rc) {
+            if(errno != ENOENT) {
+              perror(dst_p);
+              g_error = 1;
+            }
+            continue;
+          }
+          if(S_ISDIR(st.st_mode)) {
+#ifdef _DIRENT_HAVE_D_TYPE
+          delete_dir:
+#endif
+            if(g_verbose) printf("deleting %s\n", dst_p);
+            unlink_dir(dst_p);
+          } else {
+#ifdef _DIRENT_HAVE_D_TYPE
+          delete_other:
+#endif
+            if(g_verbose) printf("deleting %s\n", dst_p);
+            unlink(dst_p);
+          }
         }
       }
+      closedir(d);
     }
-    closedir(d);
   }
 
   // set mode
-  if(!dst_exists ||
-     src_st->st_mode != dst_st.st_mode
+  if(!cont->dst_exists ||
+     cont->src_st.st_mode != cont->dst_st.st_mode
   ) {
-    rc = chmod(dst_path, src_st->st_mode);
+    rc = chmod(dst_path, cont->src_st.st_mode);
     if(rc) {
       perror(dst_path);
       g_error = 1;
+      return NULL;
     }
   }
 
   // set uid and gid
-  if(!dst_exists ||
-     src_st->st_uid != dst_st.st_uid ||
-     src_st->st_gid != dst_st.st_gid
+  if(!cont->dst_exists ||
+     cont->src_st.st_uid != cont->dst_st.st_uid ||
+     cont->src_st.st_gid != cont->dst_st.st_gid
   ) {
-    rc = chown(dst_path, src_st->st_uid, src_st->st_gid);
+    rc = chown(dst_path, cont->src_st.st_uid, cont->src_st.st_gid);
     if(rc) {
       perror(dst_path);
       g_error = 1;
+      return NULL;
     }
   }
 
@@ -621,105 +590,53 @@ static void sync_dir(
   if(rc) {
     perror(dst_path);
     g_error = 1;
+    return NULL;
   }
 
-  // free src contents
-  for(i = 0; i < src_contents_count; ++i) {
-    p = src_contents[i];
-    free(p);
-  }
-  free(src_contents);
+  return NULL;
 }
 
-static int traverse_dir_enter(void *arg, const char *src_p, const struct stat *src_st) {
-  traverse_arg *t = arg;
-  const char *p, *rel_p;
-  char dst_p[PATH_MAX];
+static void * traverse_file(
+  void *arg,
+  const char *src_path,
+  const struct stat *src_st
+) {
+  struct traverse_arg *t = arg;
+  const char *p, *rel_path;
+  char dst_path[PATH_MAX];
 
-  p = path + t->src_root_len;
-  strcpy(dst_p, t->dst_root);
-  strcpy(dst_p + t->dst_root_len, p);
-  rel_p = p;
+  p = src_path + t->src_root_len;
+  strcpy(dst_path, t->dst_root);
+  strcpy(dst_path + t->dst_root_len, p);
+  rel_path = p;
   while(*p && *p == '/') ++p;
-  if(*p) rel_p = p;
+  if(*p) rel_path = p;
 
-  // stat dst
-  rc = lstat(dst_path, &dst_st);
-  dst_exists = 1;
-  if(rc) {
-    if(errno != ENOENT) {
-      perror(dst_path);
-      g_error = 1;
-      return;
-    }
-    dst_exists = 0;
-  }
-
-  // remove dst if not a directory
-  if(dst_exists && !S_ISDIR(dst_st.st_mode)) {
-    unlink(dst_path);
-    dst_exists = 0;
-  }
-
-  // create dst
-  if(!dst_exists) {
-    rc = mkdir(dst_path, 0700);
-    if(rc && errno != EEXIST) {
-      perror(dst_path);
-      g_error = 1;
-      return;
-    }
-  }
-
-  return 1;
-}
-
-static int traverse_dir_exit(void *arg, const char *src_p, const struct stat *src_st) {
-  traverse_arg *t = arg;
-  const char *p, *rel_p;
-  char dst_p[PATH_MAX];
-
-  p = path + t->src_root_len;
-  strcpy(dst_p, t->dst_root);
-  strcpy(dst_p + t->dst_root_len, p);
-  rel_p = p;
-  while(*p && *p == '/') ++p;
-  if(*p) rel_p = p;
-
-  return 0;
-}
-
-static int traverse_file(void *arg, const char *src_p, const struct stat *src_st) {
-  traverse_arg *t = arg;
-  const char *p, *rel_p;
-  char dst_p[PATH_MAX];
-
-  p = path + t->src_root_len;
-  strcpy(dst_p, t->dst_root);
-  strcpy(dst_p + t->dst_root_len, p);
-  rel_p = p;
-  while(*p && *p == '/') ++p;
-  if(*p) rel_p = p;
-
-  if(S_ISREG(st->st_mode)) {
-    sync_file(src_st, src_p, dst_p, rel_p);
-  } else if(S_ISLNK(st->st_mode)) {
-    sync_symlink(src_st, src_p, dst_p, rel_p);
+  if(S_ISREG(src_st->st_mode)) {
+    sync_file(src_st, src_path, dst_path, rel_path);
+  } else if(S_ISLNK(src_st->st_mode)) {
+    sync_symlink(src_st, src_path, dst_path, rel_path);
   } else {
-    fprintf(stderr, "file type not supported: %s\n", path);
+    fprintf(stderr, "file type not supported: %s\n", rel_path);
     g_error = 1;
   }
-  return 0;
+
+  return NULL;
 }
 
-static int traverse_error(void *arg, const char *src_p, const struct stat *src_st) {
-  perror(src_p);
+static void * traverse_error(
+  void *arg,
+  const char *src_path,
+  const struct stat *src_st,
+  void *continuation
+) {
+  perror(src_path);
   g_error = 1;
-  return 0;
+  return NULL;
 }
 
 int main(int argc, char *argv[]) {
-  int rc, opt, threads;
+  int opt, threads;
   const char *src_path, *dst_path;
   struct traverse_arg t;
 
@@ -770,7 +687,8 @@ int main(int argc, char *argv[]) {
     traverse_dir_exit,
     traverse_file,
     traverse_error,
-    &t
+    &t,
+    NULL
   );
 
   exit(g_error);
