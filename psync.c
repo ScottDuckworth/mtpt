@@ -31,7 +31,6 @@
 #define _BSD_SOURCE
 #define _FILE_OFFSET_BITS 64
 #include "mtpt.h"
-#include "threadpool.h"
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -722,7 +721,6 @@ static int traverse_error(void *arg, const char *src_p, const struct stat *src_s
 int main(int argc, char *argv[]) {
   int rc, opt, threads;
   const char *src_path, *dst_path;
-  struct stat src_st;
   struct traverse_arg t;
 
   threads = 4;
@@ -760,32 +758,13 @@ int main(int argc, char *argv[]) {
   src_path = argv[optind];
   dst_path = argv[optind+1];
 
-  // stat source
-  rc = stat(src_path, &src_st);
-  if(rc) {
-    perror(src_path);
-    exit(1);
-  }
-  if(!S_ISDIR(src_st.st_mode)) {
-    fprintf(stderr, "Error: %s is not a directory\n", src_path);
-    exit(2);
-  }
-
-  // start thread pool
-  rc = threadpool_init(&g_tp, threads, threads);
-  if(rc) {
-    errno = rc;
-    perror("threadpool_init()");
-    exit(2);
-  }
-
   t.src_root = src_path;
   t.dst_root = dst_path;
   t.src_root_len = strlen(src_path);
   t.dst_root_len = strlen(dst_path);
   mtpt(
     threads,
-    MTPT_CONFIG_SORT,
+    MTPT_CONFIG_FILE_TASKS | MTPT_CONFIG_SORT,
     src_path,
     traverse_dir_enter,
     traverse_dir_exit,
@@ -793,15 +772,6 @@ int main(int argc, char *argv[]) {
     traverse_error,
     &t
   );
-  //sync_dir(&src_st, src_path, dst_path, "");
-
-  // shutdown thread pool
-  rc = threadpool_destroy(&g_tp);
-  if(rc) {
-    errno = rc;
-    perror("threadpool_destroy()");
-    exit(2);
-  }
 
   exit(g_error);
 }
