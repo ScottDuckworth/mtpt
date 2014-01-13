@@ -605,12 +605,19 @@ static void * traverse_file(
   const char *p, *rel_path;
   char dst_path[PATH_MAX];
 
-  p = src_path + t->src_root_len;
   strcpy(dst_path, t->dst_root);
-  strcpy(dst_path + t->dst_root_len, p);
-  rel_path = p;
-  while(*p && *p == '/') ++p;
-  if(*p) rel_path = p;
+  p = src_path + t->src_root_len;
+  if(*p) {
+    strcpy(dst_path + t->dst_root_len, p);
+    rel_path = p;
+    while(*p && *p == '/') ++p;
+    if(*p) rel_path = p;
+  } else {
+    p = rel_path = src_path;
+    while(*p) {
+      if(*p++ == '/') rel_path = p;
+    }
+  }
 
   if(S_ISREG(src_st->st_mode)) {
     sync_file(src_st, src_path, dst_path, rel_path);
