@@ -126,6 +126,12 @@ static mtpt_dir_entry_t * mtpt_dir_entry_new(const char *name) {
   return entry;
 }
 
+static int mtpt_dir_entry_pcmp(const void *p1, const void *p2) {
+  const mtpt_dir_entry_t * const *e1 = p1;
+  const mtpt_dir_entry_t * const *e2 = p2;
+  return strcmp((*e1)->name, (*e2)->name);
+}
+
 static void mtpt_dir_task_child_finished(mtpt_dir_task_t *task) {
   mtpt_t *mtpt = task->mtpt;
   int rc;
@@ -417,10 +423,4 @@ int mtpt(
   threadpool_destroy(&mtpt.tp);
 
   return 0;
-}
-
-int mtpt_dir_entry_pcmp(const void *p1, const void *p2) {
-  const mtpt_dir_entry_t * const *e1 = p1;
-  const mtpt_dir_entry_t * const *e2 = p2;
-  return strcmp((*e1)->name, (*e2)->name);
 }

@@ -206,10 +206,4 @@ int mtpt(
   void **data
 );
 
-/**
- * Comparison function for mtpt_dir_entry_t **entries passed to
- * mtpt_dir_exit_method_t.  Suitable for use in qsort() or bsearch().
- */
-int mtpt_dir_entry_pcmp(const void *p1, const void *p2);
-
 #endif // MTPT_H
