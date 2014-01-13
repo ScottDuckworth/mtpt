@@ -144,7 +144,7 @@ static inline int samemtime(const struct stat *a, const struct stat *b) {
   }
 }
 
-static int settimes(const char *path, const struct stat *st, int symlink) {
+static int settimes(const char *path, const struct stat *st) {
   struct timeval tv[2];
   tv[0].tv_sec = st->st_atime;
   tv[1].tv_sec = st->st_mtime;
@@ -155,13 +155,7 @@ static int settimes(const char *path, const struct stat *st, int symlink) {
   tv[0].tv_usec = 0;
   tv[1].tv_usec = 0;
 #endif
-#if defined __linux__ || defined __FreeBSD__
-  return lutimes(path, tv);
-#else
-  // lutimes() does not exist so there is no way to set times of a symlink
-  if(symlink) return 0;
   return utimes(path, tv);
-#endif
 }
 
 static void sync_file(
@@ -325,7 +319,7 @@ static void sync_file(
     close(dst_fd);
 
     // set mtime
-    rc = settimes(dst_path, src_st, 0);
+    rc = settimes(dst_path, src_st);
     if(rc) {
       perror(dst_path);
       g_error = 1;
@@ -433,14 +427,6 @@ static void sync_symlink(
   if(!dst_exists) {
     if(g_verbose) printf("%s\n", rel_path);
     rc = symlink(src_target, dst_path);
-    if(rc) {
-      perror(dst_path);
-      g_error = 1;
-      return;
-    }
-
-    // set mtime
-    rc = settimes(dst_path, src_st, 1);
     if(rc) {
       perror(dst_path);
       g_error = 1;
@@ -622,7 +608,7 @@ static void * traverse_dir_exit(
   }
 
   // set mtime
-  rc = settimes(dst_path, src_st, 0);
+  rc = settimes(dst_path, src_st);
   if(rc) {
     perror(dst_path);
     g_error = 1;
