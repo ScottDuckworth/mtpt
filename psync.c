@@ -45,6 +45,7 @@
 #include <utime.h>
 
 #define IO_BUFFER_SIZE (1<<20) // 1 MB
+#define DEFAULT_NTHREADS 4
 
 struct traverse_arg {
   const char *src_root;
@@ -72,9 +73,9 @@ static void usage(FILE *file, const char *arg0) {
     "  -h    Print this message\n"
     "  -v    Be verbose\n"
     "  -D    Do not delete files not in source from destination\n"
-    "  -j N  Copy N files a a time\n"
+    "  -j N  Copy N files at a time (default %d)\n"
     "  -w S  mtime can be within S seconds to assume equal\n"
-    , arg0);
+    , arg0, DEFAULT_NTHREADS);
 }
 
 static void unlink_dir(const char *path) {
@@ -685,7 +686,7 @@ int main(int argc, char *argv[]) {
   struct traverse_arg t;
 
   g_euid = geteuid();
-  threads = 4;
+  threads = DEFAULT_NTHREADS;
 
   while((opt = getopt(argc, argv, "hvDj:w:")) != -1) {
     switch(opt) {
