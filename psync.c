@@ -198,10 +198,14 @@ static void sync_file(
     // open src for reading
     src_fd = open(src_path, O_RDONLY);
     if(src_fd == -1) {
-      perror(src_path);
-      g_error = 1;
+      if(errno != ENOENT) {
+        perror(src_path);
+        g_error = 1;
+      }
       return;
     }
+
+    if(g_verbose) printf("%s\n", rel_path);
 
     // open dst for writing
     dst_fd = open(dst_path, O_WRONLY | O_CREAT, 0600);
@@ -396,6 +400,14 @@ static void sync_symlink(
       g_error = 1;
       return;
     }
+
+    // set mtime
+    rc = settimes(dst_path, src_st, 1);
+    if(rc) {
+      perror(dst_path);
+      g_error = 1;
+      return;
+    }
   }
 
   // set uid and gid
@@ -410,14 +422,6 @@ static void sync_symlink(
       return;
     }
   }
-
-  // set mtime
-  rc = settimes(dst_path, src_st, 1);
-  if(rc) {
-    perror(dst_path);
-    g_error = 1;
-    return;
-  }
 }
 
 static int traverse_dir_enter(
@@ -428,7 +432,7 @@ static int traverse_dir_enter(
 ) {
   struct traverse_arg *t = arg;
   struct traverse_continuation *cont;
-  const char *p, *rel_path;
+  const char *p;
   int rc, dst_exists;
   struct stat dst_st;
   char dst_path[PATH_MAX];
@@ -436,9 +440,6 @@ static int traverse_dir_enter(
   p = src_path + t->src_root_len;
   strcpy(dst_path, t->dst_root);
   strcpy(dst_path + t->dst_root_len, p);
-  rel_path = p;
-  while(*p && *p == '/') ++p;
-  if(*p) rel_path = p;
 
   // stat dst
   rc = lstat(dst_path, &dst_st);
@@ -477,6 +478,12 @@ static int traverse_dir_enter(
   return 1;
 }
 
+int find_entry(const void *p1, const void *p2) {
+  const char *key = p1;
+  const mtpt_dir_entry_t * const *entry = p2;
+  return strcmp(key, (*entry)->name);
+}
+
 static void * traverse_dir_exit(
   void *arg,
   const char *src_path,
@@ -487,7 +494,7 @@ static void * traverse_dir_exit(
 ) {
   struct traverse_arg *t = arg;
   struct traverse_continuation *cont = continuation;
-  const char *p, *rel_path;
+  const char *p;
   DIR *d;
   struct dirent *dirp;
   int rc;
@@ -498,15 +505,6 @@ static void * traverse_dir_exit(
   p = src_path + t->src_root_len;
   strcpy(dst_path, t->dst_root);
   strcpy(dst_path + t->dst_root_len, p);
-  rel_path = p;
-  while(*p && *p == '/') ++p;
-  if(*p) rel_path = p;
-
-  size_t i;
-  printf("Contents of %s:\n", src_path);
-  for(i = 0; i < entries_count; ++i) {
-    printf("  %s\n", entries[i]->name);
-  }
 
   if(g_delete && cont->dst_exists && !samemtime(&cont->src_st, &cont->dst_st)) {
     // delete files in dst that are not in src
@@ -514,14 +512,14 @@ static void * traverse_dir_exit(
     if(!d) {
       perror(dst_path);
       g_error = 1;
+      goto out;
     } else {
       while((dirp = readdir(d))) {
         if(strcmp(dirp->d_name, ".") == 0 || strcmp(dirp->d_name, "..") == 0) {
           continue;
         }
         p = dirp->d_name;
-        if(!bsearch(&p, entries, entries_count, sizeof(mtpt_dir_entry_t *), mtpt_dir_entry_pcmp)) {
-          printf("%s not in %s\n", p, src_path);
+        if(!bsearch(p, entries, entries_count, sizeof(mtpt_dir_entry_t *), find_entry)) {
           snprintf(dst_p, PATH_MAX, "%s/%s", dst_path, p);
 #ifdef _DIRENT_HAVE_D_TYPE
           switch(dirp->d_type) {
@@ -568,7 +566,7 @@ static void * traverse_dir_exit(
     if(rc) {
       perror(dst_path);
       g_error = 1;
-      return NULL;
+      goto out;
     }
   }
 
@@ -581,7 +579,7 @@ static void * traverse_dir_exit(
     if(rc) {
       perror(dst_path);
       g_error = 1;
-      return NULL;
+      goto out;
     }
   }
 
@@ -590,9 +588,11 @@ static void * traverse_dir_exit(
   if(rc) {
     perror(dst_path);
     g_error = 1;
-    return NULL;
+    goto out;
   }
 
+out:
+  free(cont);
   return NULL;
 }
 
