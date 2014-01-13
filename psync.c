@@ -62,6 +62,7 @@ struct traverse_continuation {
 static int g_error = 0;
 static int g_verbose = 0;
 static int g_delete = 1;
+static time_t g_modify_window = 0;
 
 static void usage(FILE *file, const char *arg0) {
   fprintf(file,
@@ -71,6 +72,7 @@ static void usage(FILE *file, const char *arg0) {
     "  -v    Be verbose\n"
     "  -D    Do not delete files not in source from destination\n"
     "  -j N  Copy N files a a time\n"
+    "  -w S  mtime can be within S seconds to assume equal\n"
     , arg0);
 }
 
@@ -128,11 +130,16 @@ static void unlink_dir(const char *path) {
 }
 
 static inline int samemtime(const struct stat *a, const struct stat *b) {
-  return a->st_mtime == b->st_mtime
+  time_t diff = a->st_mtime - b->st_mtime;
+  if(g_modify_window) {
+    return labs(diff) <= g_modify_window;
+  } else {
+    return diff == 0
 #ifdef __linux__
-         && a->st_mtim.tv_nsec == b->st_mtim.tv_nsec
+           && a->st_mtim.tv_nsec == b->st_mtim.tv_nsec
 #endif
-  ;
+    ;
+  }
 }
 
 static int settimes(const char *path, const struct stat *st, int symlink) {
@@ -649,7 +656,7 @@ int main(int argc, char *argv[]) {
 
   threads = 4;
 
-  while((opt = getopt(argc, argv, "hvDj:")) != -1) {
+  while((opt = getopt(argc, argv, "hvDj:w:")) != -1) {
     switch(opt) {
     case 'h':
       usage(stdout, argv[0]);
@@ -664,6 +671,13 @@ int main(int argc, char *argv[]) {
       threads = atoi(optarg);
       if(threads <= 0) {
         fprintf(stderr, "Error: number of threads (-j) must be a positive integer\n");
+        exit(2);
+      }
+      break;
+    case 'w':
+      g_modify_window = atoi(optarg);
+      if(g_modify_window < 0) {
+        fprintf(stderr, "Error: mtime window (-w) must be a non-negative integer\n");
         exit(2);
       }
       break;
