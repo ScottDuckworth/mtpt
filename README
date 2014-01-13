@@ -1,0 +1,6 @@
+psync is a tool that can be used to synchronize one directory with another,
+similar to rsync, but it only works with local files.  psync can be faster
+than rsync, especially when dealing with RAID arrays or distributed file
+systems, because multiple operations can be going on simultaneously.  Even
+when differences between the directories are sparse, psync can be faster than
+rsync because the directory traversal itself is run over multiple threads.
