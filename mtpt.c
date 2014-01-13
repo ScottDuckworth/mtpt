@@ -370,7 +370,7 @@ int mtpt(
   int rc;
 
   // stat path
-  rc = stat(path, &st);
+  rc = lstat(path, &st);
   if(rc) return -1;
 
   // if the root path is not a directory, just handle it in this thread
