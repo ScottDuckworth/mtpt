@@ -483,6 +483,8 @@ static int traverse_dir_enter(
   strcpy(dst_path, t->dst_root);
   strcpy(dst_path + t->dst_root_len, p);
 
+  if(g_verbose > 1) printf(">>> %s/\n", src_path);
+
   // stat dst
   rc = lstat(dst_path, &dst_st);
   dst_exists = 1;
@@ -600,6 +602,8 @@ static void * traverse_dir_exit(
     }
   }
 
+  if(g_verbose > 1) printf("<<< %s/\n", src_path);
+
   // set mode
   if(!cont->dst_exists ||
      cont->src_st.st_mode != cont->dst_st.st_mode
@@ -698,7 +702,7 @@ int main(int argc, char *argv[]) {
       usage(stdout, argv[0]);
       exit(0);
     case 'v':
-      g_verbose = 1;
+      g_verbose += 1;
       break;
     case 'D':
       g_delete = 0;
