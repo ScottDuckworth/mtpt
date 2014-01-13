@@ -59,6 +59,7 @@ struct traverse_continuation {
   struct stat src_st;
 };
 
+static uid_t g_euid;
 static int g_error = 0;
 static int g_verbose = 0;
 static int g_delete = 1;
@@ -213,6 +214,35 @@ static void sync_file(
     }
 
     if(g_verbose) printf("%s\n", rel_path);
+
+    if(dst_exists && g_euid != 0) {
+      // make sure I can write to dst
+      rc = access(dst_path, W_OK);
+      if(rc) {
+        if(errno == EACCES) {
+          mode_t m = dst_st.st_mode | S_IWUSR;
+          if(dst_st.st_uid != g_euid) {
+            // if I'm not the owner of the file then perhaps I have access
+            // through the group
+            m |= S_IWGRP;
+          }
+          rc = chmod(dst_path, m);
+          if(rc) {
+            perror(dst_path);
+            g_error = 1;
+            close(src_fd);
+            return;
+          }
+        } else if(errno == ENOENT) {
+          dst_exists = 0;
+        } else {
+          perror(dst_path);
+          g_error = 1;
+          close(src_fd);
+          return;
+        }
+      }
+    }
 
     // open dst for writing
     dst_fd = open(dst_path, O_WRONLY | O_CREAT, 0600);
@@ -654,6 +684,7 @@ int main(int argc, char *argv[]) {
   const char *src_path, *dst_path;
   struct traverse_arg t;
 
+  g_euid = geteuid();
   threads = 4;
 
   while((opt = getopt(argc, argv, "hvDj:w:")) != -1) {
