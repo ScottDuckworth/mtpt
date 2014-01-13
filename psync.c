@@ -64,7 +64,10 @@ static uid_t g_euid;
 static int g_error = 0;
 static int g_verbose = 0;
 static int g_delete = 1;
-static time_t g_modify_window = 0;
+#ifdef __linux__
+static int g_subsecond = 0;
+#endif
+static int g_modify_window = 0;
 
 static void usage(FILE *file, const char *arg0) {
   fprintf(file,
@@ -74,6 +77,9 @@ static void usage(FILE *file, const char *arg0) {
     "  -v    Be verbose\n"
     "  -D    Do not delete files not in source from destination\n"
     "  -j N  Copy N files at a time (default %d)\n"
+#ifdef __linux__
+    "  -s    Use sub-second precision when comparing mtimes\n"
+#endif
     "  -w S  mtime can be within S seconds to assume equal\n"
     , arg0, DEFAULT_NTHREADS);
 }
@@ -132,15 +138,27 @@ static void unlink_dir(const char *path) {
 }
 
 static inline int samemtime(const struct stat *a, const struct stat *b) {
-  time_t diff = a->st_mtime - b->st_mtime;
-  if(g_modify_window) {
-    return labs(diff) <= g_modify_window;
-  } else {
-    return diff == 0
+  long int diff_s = a->st_mtime - b->st_mtime;
+
 #ifdef __linux__
-           && a->st_mtim.tv_nsec == b->st_mtim.tv_nsec
+  if(g_subsecond) {
+    long int diff_ns = a->st_mtim.tv_nsec - b->st_mtim.tv_nsec;
+    if(g_modify_window) {
+      if(diff_ns != 0) {
+        if(diff_ns < 0) diff_s -= 1;
+        if(diff_s < 0) diff_s = -diff_s - 1;
+      }
+      return diff_s < g_modify_window;
+    } else {
+      return diff_s == 0 && diff_ns == 0;
+    }
+  }
 #endif
-    ;
+
+  if(g_modify_window) {
+    return labs(diff_s) <= g_modify_window;
+  } else {
+    return diff_s == 0;
   }
 }
 
@@ -674,7 +692,7 @@ int main(int argc, char *argv[]) {
   g_euid = geteuid();
   threads = DEFAULT_NTHREADS;
 
-  while((opt = getopt(argc, argv, "hvDj:w:")) != -1) {
+  while((opt = getopt(argc, argv, "hvDj:sw:")) != -1) {
     switch(opt) {
     case 'h':
       usage(stdout, argv[0]);
@@ -691,6 +709,14 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Error: number of threads (-j) must be a positive integer\n");
         exit(2);
       }
+      break;
+    case 's':
+#ifdef __linux__
+      g_subsecond = 1;
+#else
+      fprintf(stderr, "Error: -m only valid on Linux\n");
+      exit(2);
+#endif
       break;
     case 'w':
       g_modify_window = atoi(optarg);
