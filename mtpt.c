@@ -270,14 +270,35 @@ static void mtpt_dir_enter_task_handler(void *arg) {
   entries_size = 256;
   entries_count = 0;
   entries = malloc(sizeof(mtpt_dir_entry_t *) * entries_size);
-  while((dirp = readdir(d))) {
+  if(!entries) goto entries_malloc_fail;
+  while(errno = 0, (dirp = readdir(d))) {
     if(strcmp(dirp->d_name, ".") == 0 || strcmp(dirp->d_name, "..") == 0)
       continue;
-    entries[entries_count] = mtpt_dir_entry_new(dirp->d_name);
-    if(++entries_count == entries_size) {
+    if(entries_count == entries_size) {
       entries_size <<= 1;
       entries = realloc(entries, sizeof(char *) * entries_size);
+      if(!entries) goto entries_realloc_fail;
     }
+    entry = mtpt_dir_entry_new(dirp->d_name);
+    if(!entry) goto entries_realloc_fail;
+    entries[entries_count++] = entry;
+  }
+  if(errno) {
+entries_realloc_fail:
+    rc = errno;
+    for(i = 0; i < entries_count; ++i) {
+      free(entries[i]);
+    }
+    free(entries);
+    errno = rc;
+entries_malloc_fail:
+    if(mtpt->error_method) {
+      data = (*mtpt->error_method)(mtpt->arg, task->path, &task->st, task->continuation);
+      if(task->data) *task->data = data;
+    }
+    closedir(d);
+    mtpt_dir_task_delete(task);
+    return;
   }
   closedir(d);
   if(mtpt->config & MTPT_CONFIG_SORT) {
@@ -308,36 +329,40 @@ static void mtpt_dir_enter_task_handler(void *arg) {
 
     if(S_ISDIR(st.st_mode)) {
       mtpt_dir_task_t *t = mtpt_dir_task_new(path);
+      if(!t) goto dir_task_new_fail;
       t->mtpt = mtpt;
       t->data = &entry->data;
       t->parent = task;
       t->st = st;
       rc = threadpool_add(&mtpt->tp, mtpt_dir_enter_task_handler, t);
       if(rc) {
+        mtpt_dir_task_delete(t);
         errno = rc;
+dir_task_new_fail:
         if(mtpt->error_method) {
           data = (*mtpt->error_method)(mtpt->arg, path, &st, NULL);
           if(task->data) *task->data = data;
         }
-        mtpt_dir_task_delete(t);
       } else {
         ++task->children;
         no_children = 0;
       }
     } else if(mtpt->config & MTPT_CONFIG_FILE_TASKS) {
       mtpt_file_task_t *t = mtpt_file_task_new(path);
+      if(!t) goto file_task_new_fail;
       t->mtpt = mtpt;
       t->data = &entry->data;
       t->parent = task;
       t->st = st;
       rc = threadpool_add(&mtpt->tp, mtpt_file_task_handler, t);
       if(rc) {
+        free(t);
         errno = rc;
+file_task_new_fail:
         if(mtpt->error_method) {
           data = (*mtpt->error_method)(mtpt->arg, path, &st, NULL);
           if(task->data) *task->data = data;
         }
-        free(t);
       } else {
         ++task->children;
         no_children = 0;
