@@ -383,8 +383,7 @@ file_task_new_fail:
       }
     } else {
       if(mtpt->file_method) {
-        data = (*mtpt->file_method)(mtpt->arg, path, &st);
-        if(task->data) *task->data = data;
+        entry->data = (*mtpt->file_method)(mtpt->arg, path, &st);
       }
     }
   }
