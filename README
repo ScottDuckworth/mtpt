@@ -1,6 +1,14 @@
-psync is a tool that can be used to synchronize one directory with another,
-similar to rsync, but it only works with local files.  psync can be faster
-than rsync, especially when dealing with RAID arrays or distributed file
-systems, because multiple operations can be going on simultaneously.  Even
-when differences between the directories are sparse, psync can be faster than
-rsync because the directory traversal itself is run over multiple threads.
+mtpt, or Multi-Threaded Path Traversal tools, is a set of tools for UNIX-like
+systems that are focused on manipulating large numbers of files and optimized
+for file systems which can read or write multiple files at a time (e.g.
+distributed file systems or file systems residing on RAID arrays).
+
+mtpt tools use multiple threads for directory traversal and for operating on
+individual files.  The effects of this typically includes higher resource
+utilization and shorter completion times.
+
+mtsync
+------
+
+Used to synchronize one directory with another.  Similar to rsync, but it only
+works with local files, and with fewer bells and whistles.
