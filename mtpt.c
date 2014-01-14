@@ -48,9 +48,10 @@ typedef struct mtpt {
   mtpt_error_method_t error_method;
   void *arg;
   int config;
+  int finished;
   size_t spinlock_countdown;
   pthread_mutex_t mutex;
-  pthread_cond_t finished;
+  pthread_cond_t finished_cond;
 } mtpt_t;
 
 typedef struct mtpt_dir_task {
@@ -198,7 +199,8 @@ static void mtpt_file_task_handler(void *arg) {
   } else {
     // the root task is finished
     pthread_mutex_lock(&mtpt->mutex);
-    pthread_cond_signal(&mtpt->finished);
+    mtpt->finished = 1;
+    pthread_cond_signal(&mtpt->finished_cond);
     pthread_mutex_unlock(&mtpt->mutex);
   }
   free(task);
@@ -231,7 +233,8 @@ static void mtpt_dir_exit_task_handler(void *arg) {
   } else {
     // the root task is finished
     pthread_mutex_lock(&mtpt->mutex);
-    pthread_cond_signal(&mtpt->finished);
+    mtpt->finished = 1;
+    pthread_cond_signal(&mtpt->finished_cond);
     pthread_mutex_unlock(&mtpt->mutex);
   }
   mtpt_dir_task_delete(task);
@@ -257,7 +260,8 @@ static void mtpt_dir_enter_task_handler(void *arg) {
       } else {
         // the root task is finished
         pthread_mutex_lock(&mtpt->mutex);
-        pthread_cond_signal(&mtpt->finished);
+        mtpt->finished = 1;
+        pthread_cond_signal(&mtpt->finished_cond);
         pthread_mutex_unlock(&mtpt->mutex);
       }
       mtpt_dir_task_delete(task);
@@ -434,7 +438,7 @@ int mtpt(
     ret = -1;
     goto out1;
   }
-  rc = pthread_cond_init(&mtpt.finished, NULL);
+  rc = pthread_cond_init(&mtpt.finished_cond, NULL);
   if(rc) {
     errno = rc;
     ret = -1;
@@ -452,10 +456,10 @@ int mtpt(
   mtpt.error_method = error_method;
   mtpt.arg = arg;
   mtpt.config = config;
+  mtpt.finished = 0;
   mtpt.spinlock_countdown = nthreads;
 
   // 3...2...1...GO!
-  pthread_mutex_lock(&mtpt.mutex);
   rc = threadpool_add(&mtpt.tp, mtpt_dir_enter_task_handler, root_task);
   if(rc) {
     errno = rc;
@@ -465,13 +469,16 @@ int mtpt(
   root_task = NULL;
 
   // wait for all tasks to finish
-  pthread_cond_wait(&mtpt.finished, &mtpt.mutex);
+  pthread_mutex_lock(&mtpt.mutex);
+  while(!mtpt.finished) {
+    pthread_cond_wait(&mtpt.finished_cond, &mtpt.mutex);
+  }
+  pthread_mutex_unlock(&mtpt.mutex);
 
 out4:
-  pthread_mutex_unlock(&mtpt.mutex);
   threadpool_destroy(&mtpt.tp);
 out3:
-  pthread_cond_destroy(&mtpt.finished);
+  pthread_cond_destroy(&mtpt.finished_cond);
 out2:
   pthread_mutex_destroy(&mtpt.mutex);
 out1:
