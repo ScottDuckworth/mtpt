@@ -224,6 +224,7 @@ static void mtpt_dir_exit_task_handler(void *arg) {
     );
     if(task->data) *task->data = data;
   }
+
   if(task->parent) {
     // let my parent know that I'm finished
     mtpt_dir_task_child_finished(task->parent);
@@ -250,7 +251,16 @@ static void mtpt_dir_enter_task_handler(void *arg) {
   if(mtpt->dir_enter_method) {
     rc = (*mtpt->dir_enter_method)(mtpt->arg, task->path, &task->st, &task->continuation);
     if(!rc) {
-      mtpt_dir_exit_task_handler(task);
+      if(task->parent) {
+        // let my parent know that I'm finished
+        mtpt_dir_task_child_finished(task->parent);
+      } else {
+        // the root task is finished
+        pthread_mutex_lock(&mtpt->mutex);
+        pthread_cond_signal(&mtpt->finished);
+        pthread_mutex_unlock(&mtpt->mutex);
+      }
+      mtpt_dir_task_delete(task);
       return;
     }
   }
