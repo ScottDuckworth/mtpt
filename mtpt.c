@@ -187,11 +187,9 @@ static void mtpt_dir_task_child_finished(mtpt_dir_task_t *task) {
 static void mtpt_file_task_handler(void *arg) {
   mtpt_file_task_t *task = arg;
   mtpt_t *mtpt = task->mtpt;
-  void *data;
 
   if(mtpt->file_method) {
-    data = (*mtpt->file_method)(mtpt->arg, task->path, &task->st);
-    if(task->data) *task->data = data;
+    *task->data = (*mtpt->file_method)(mtpt->arg, task->path, &task->st);
   }
   if(task->parent) {
     // let my parent know that I'm finished
@@ -209,14 +207,13 @@ static void mtpt_file_task_handler(void *arg) {
 static void mtpt_dir_exit_task_handler(void *arg) {
   mtpt_dir_task_t *task = arg;
   mtpt_t *mtpt = task->mtpt;
-  void *data;
 
   // wait until mtpt_dir_task_child_finished() is done with me
   pthread_mutex_lock(&task->mutex);
   pthread_mutex_unlock(&task->mutex);
 
   if(mtpt->dir_exit_method) {
-    data = (*mtpt->dir_exit_method)(
+    *task->data = (*mtpt->dir_exit_method)(
       mtpt->arg,
       task->path,
       &task->st,
@@ -224,7 +221,6 @@ static void mtpt_dir_exit_task_handler(void *arg) {
       task->entries,
       task->entries_count
     );
-    if(task->data) *task->data = data;
   }
 
   if(task->parent) {
@@ -244,7 +240,6 @@ static void mtpt_dir_enter_task_handler(void *arg) {
   mtpt_dir_task_t *task = arg;
   mtpt_t *mtpt = task->mtpt;
   DIR *d;
-  void *data;
   struct dirent *dirp;
   mtpt_dir_entry_t *entry;
   mtpt_dir_entry_t **entries;
@@ -273,8 +268,7 @@ static void mtpt_dir_enter_task_handler(void *arg) {
   d = opendir(task->path);
   if(!d) {
     if(mtpt->error_method) {
-      data = (*mtpt->error_method)(mtpt->arg, task->path, &task->st, task->continuation);
-      if(task->data) *task->data = data;
+      *task->data = (*mtpt->error_method)(mtpt->arg, task->path, &task->st, task->continuation);
     }
     mtpt_dir_task_delete(task);
     return;
@@ -307,8 +301,7 @@ entries_realloc_fail:
     errno = rc;
 entries_malloc_fail:
     if(mtpt->error_method) {
-      data = (*mtpt->error_method)(mtpt->arg, task->path, &task->st, task->continuation);
-      if(task->data) *task->data = data;
+      *task->data = (*mtpt->error_method)(mtpt->arg, task->path, &task->st, task->continuation);
     }
     closedir(d);
     mtpt_dir_task_delete(task);
@@ -334,8 +327,7 @@ entries_malloc_fail:
     if(rc) {
       if(errno != ENOENT) {
         if(mtpt->error_method) {
-          data = (*mtpt->error_method)(mtpt->arg, path, NULL, NULL);
-          if(task->data) *task->data = data;
+          *task->data = (*mtpt->error_method)(mtpt->arg, path, NULL, NULL);
         }
       }
       continue;
@@ -354,8 +346,7 @@ entries_malloc_fail:
         errno = rc;
 dir_task_new_fail:
         if(mtpt->error_method) {
-          data = (*mtpt->error_method)(mtpt->arg, path, &st, NULL);
-          if(task->data) *task->data = data;
+          *task->data = (*mtpt->error_method)(mtpt->arg, path, &st, NULL);
         }
       } else {
         ++task->children;
@@ -374,8 +365,7 @@ dir_task_new_fail:
         errno = rc;
 file_task_new_fail:
         if(mtpt->error_method) {
-          data = (*mtpt->error_method)(mtpt->arg, path, &st, NULL);
-          if(task->data) *task->data = data;
+          *task->data = (*mtpt->error_method)(mtpt->arg, path, &st, NULL);
         }
       } else {
         ++task->children;
@@ -426,7 +416,7 @@ int mtpt(
   root_task = mtpt_dir_task_new(path);
   if(root_task == NULL) return -1;
   root_task->mtpt = &mtpt;
-  root_task->data = data;
+  root_task->data = &d;
   root_task->parent = NULL;
   root_task->st = st;
 
@@ -473,6 +463,8 @@ int mtpt(
     pthread_cond_wait(&mtpt.finished_cond, &mtpt.mutex);
   }
   pthread_mutex_unlock(&mtpt.mutex);
+
+  if(data) *data = d;
 
 out4:
   threadpool_destroy(&mtpt.tp);
