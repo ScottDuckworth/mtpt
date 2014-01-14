@@ -367,7 +367,7 @@ int mtpt(
   struct stat st;
   void *d;
   mtpt_dir_task_t *root_task;
-  int rc;
+  int rc, ret = 0;
 
   // stat path
   rc = lstat(path, &st);
@@ -389,11 +389,23 @@ int mtpt(
   root_task->st = st;
 
   // initialize the mtpt structure
+  rc = pthread_mutex_init(&mtpt.mutex, NULL);
+  if(rc) {
+    errno = rc;
+    ret = -1;
+    goto out1;
+  }
+  rc = pthread_cond_init(&mtpt.finished, NULL);
+  if(rc) {
+    errno = rc;
+    ret = -1;
+    goto out2;
+  }
   rc = threadpool_init(&mtpt.tp, nthreads, 0);
   if(rc) {
-    mtpt_dir_task_delete(root_task);
     errno = rc;
-    return -1;
+    ret = -1;
+    goto out3;
   }
   mtpt.dir_enter_method = dir_enter_method;
   mtpt.dir_exit_method = dir_exit_method;
@@ -402,25 +414,29 @@ int mtpt(
   mtpt.arg = arg;
   mtpt.config = config;
   mtpt.spinlock_countdown = nthreads;
-  pthread_mutex_init(&mtpt.mutex, NULL);
-  pthread_cond_init(&mtpt.finished, NULL);
 
   // 3...2...1...GO!
+  pthread_mutex_lock(&mtpt.mutex);
   rc = threadpool_add(&mtpt.tp, mtpt_dir_enter_task_handler, root_task);
   if(rc) {
-    threadpool_destroy(&mtpt.tp);
-    mtpt_dir_task_delete(root_task);
     errno = rc;
-    return -1;
+    ret = -1;
+    goto out4;
   }
+  root_task = NULL;
 
-  // wait for all tasks to finish and shut down
-  pthread_mutex_lock(&mtpt.mutex);
+  // wait for all tasks to finish
   pthread_cond_wait(&mtpt.finished, &mtpt.mutex);
-  pthread_mutex_unlock(&mtpt.mutex);
-  pthread_mutex_destroy(&mtpt.mutex);
-  pthread_cond_destroy(&mtpt.finished);
-  threadpool_destroy(&mtpt.tp);
 
-  return 0;
+out4:
+  pthread_mutex_unlock(&mtpt.mutex);
+  threadpool_destroy(&mtpt.tp);
+out3:
+  pthread_cond_destroy(&mtpt.finished);
+out2:
+  pthread_mutex_destroy(&mtpt.mutex);
+out1:
+  if(root_task) mtpt_dir_task_delete(root_task);
+
+  return ret;
 }
