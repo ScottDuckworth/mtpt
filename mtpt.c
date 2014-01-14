@@ -77,6 +77,13 @@ typedef struct mtpt_file_task {
 
 static void mtpt_dir_exit_task_handler(void *arg);
 
+static void mtpt_root_task_finished(mtpt_t *mtpt) {
+  pthread_mutex_lock(&mtpt->mutex);
+  mtpt->finished = 1;
+  pthread_cond_signal(&mtpt->finished_cond);
+  pthread_mutex_unlock(&mtpt->mutex);
+}
+
 static mtpt_file_task_t * mtpt_file_task_new(const char *path) {
   mtpt_file_task_t *task;
 
@@ -191,16 +198,10 @@ static void mtpt_file_task_handler(void *arg) {
   if(mtpt->file_method) {
     *task->data = (*mtpt->file_method)(mtpt->arg, task->path, &task->st);
   }
-  if(task->parent) {
-    // let my parent know that I'm finished
-    mtpt_dir_task_child_finished(task->parent);
-  } else {
-    // the root task is finished
-    pthread_mutex_lock(&mtpt->mutex);
-    mtpt->finished = 1;
-    pthread_cond_signal(&mtpt->finished_cond);
-    pthread_mutex_unlock(&mtpt->mutex);
-  }
+
+  // files (non-directories) will never be the root task and will always
+  // have a parent
+  mtpt_dir_task_child_finished(task->parent);
   free(task);
 }
 
@@ -224,14 +225,9 @@ static void mtpt_dir_exit_task_handler(void *arg) {
   }
 
   if(task->parent) {
-    // let my parent know that I'm finished
     mtpt_dir_task_child_finished(task->parent);
   } else {
-    // the root task is finished
-    pthread_mutex_lock(&mtpt->mutex);
-    mtpt->finished = 1;
-    pthread_cond_signal(&mtpt->finished_cond);
-    pthread_mutex_unlock(&mtpt->mutex);
+    mtpt_root_task_finished(mtpt);
   }
   mtpt_dir_task_delete(task);
 }
@@ -250,14 +246,9 @@ static void mtpt_dir_enter_task_handler(void *arg) {
     rc = (*mtpt->dir_enter_method)(mtpt->arg, task->path, &task->st, &task->continuation);
     if(!rc) {
       if(task->parent) {
-        // let my parent know that I'm finished
         mtpt_dir_task_child_finished(task->parent);
       } else {
-        // the root task is finished
-        pthread_mutex_lock(&mtpt->mutex);
-        mtpt->finished = 1;
-        pthread_cond_signal(&mtpt->finished_cond);
-        pthread_mutex_unlock(&mtpt->mutex);
+        mtpt_root_task_finished(mtpt);
       }
       mtpt_dir_task_delete(task);
       return;
