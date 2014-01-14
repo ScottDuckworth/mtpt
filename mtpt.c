@@ -171,6 +171,10 @@ static void mtpt_dir_task_child_finished(mtpt_dir_task_t *task) {
         sleep(1); // so we don't chew up the CPU
         rc = threadpool_add(&mtpt->tp, mtpt_dir_exit_task_handler, task);
       } while(rc);
+      fprintf(stderr,
+        "Successfully requeued %s for processing.\n",
+        task->path
+      );
       pthread_mutex_lock(&mtpt->mutex);
       ++mtpt->spinlock_countdown;
       pthread_mutex_unlock(&mtpt->mutex);
