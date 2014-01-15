@@ -63,11 +63,16 @@ struct traverse_continuation {
 static uid_t g_euid;
 static int g_error = 0;
 static int g_verbose = 0;
+static int g_preserve_mode = 0;
+static int g_preserve_ownership = 0;
+static int g_preserve_mtime = 0;
 static int g_delete = 1;
 #ifdef __linux__
 static int g_subsecond = 0;
 #endif
 static int g_modify_window = 0;
+static int g_one_file_system = 0;
+static dev_t g_dev;
 
 static void usage(FILE *file, const char *arg0) {
   fprintf(file,
@@ -75,12 +80,17 @@ static void usage(FILE *file, const char *arg0) {
     "Options:\n"
     "  -h    Print this message\n"
     "  -v    Be verbose\n"
+    "  -a    Archive; equals -pot\n"
+    "  -p    Preserve permissions\n"
+    "  -o    Preserve ownership (only preserves user if root)\n"
+    "  -t    Preserve modification times\n"
     "  -D    Do not delete files not in source from destination\n"
     "  -j N  Copy N files at a time (default %d)\n"
 #ifdef __linux__
     "  -s    Use sub-second precision when comparing mtimes\n"
 #endif
     "  -w S  mtime can be within S seconds to assume equal\n"
+    "  -x    Do not cross file system boundaries\n"
     , arg0, DEFAULT_NTHREADS);
 }
 
@@ -307,62 +317,69 @@ static void sync_file(
       return;
     }
 
-    // set mode
-    if(!dst_exists ||
-       src_st->st_mode != dst_st.st_mode
-    ) {
-      rc = fchmod(dst_fd, src_st->st_mode);
-      if(rc) {
-        perror(dst_path);
-        g_error = 1;
-        close(dst_fd);
-        return;
+    if(g_preserve_mode) {
+      if(!dst_exists ||
+         src_st->st_mode != dst_st.st_mode
+      ) {
+        rc = fchmod(dst_fd, src_st->st_mode);
+        if(rc) {
+          perror(dst_path);
+          g_error = 1;
+          close(dst_fd);
+          return;
+        }
       }
     }
 
-    // set uid and gid
-    if(!dst_exists ||
-       src_st->st_uid != dst_st.st_uid ||
-       src_st->st_gid != dst_st.st_gid
-    ) {
-      rc = fchown(dst_fd, src_st->st_uid, src_st->st_gid);
-      if(rc) {
-        perror(dst_path);
-        g_error = 1;
-        close(dst_fd);
-        return;
+    if(g_preserve_ownership) {
+      if(!dst_exists ||
+         (g_euid == 0 && src_st->st_uid != dst_st.st_uid) ||
+         src_st->st_gid != dst_st.st_gid
+      ) {
+        uid_t uid = g_euid == 0 ? src_st->st_uid : (uid_t)-1;
+        rc = fchown(dst_fd, uid, src_st->st_gid);
+        if(rc) {
+          perror(dst_path);
+          g_error = 1;
+          close(dst_fd);
+          return;
+        }
       }
     }
 
     close(dst_fd);
 
-    // set mtime
-    rc = settimes(dst_path, src_st);
-    if(rc) {
-      perror(dst_path);
-      g_error = 1;
-      return;
-    }
-  } else { // file size and mtime are the same
-    // set mode
-    if(src_st->st_mode != dst_st.st_mode) {
-      rc = chmod(dst_path, src_st->st_mode);
+    if(g_preserve_mtime) {
+      rc = settimes(dst_path, src_st);
       if(rc) {
         perror(dst_path);
         g_error = 1;
         return;
       }
     }
+  } else { // file size and mtime are the same
+    if(g_preserve_mode) {
+      if(src_st->st_mode != dst_st.st_mode) {
+        rc = chmod(dst_path, src_st->st_mode);
+        if(rc) {
+          perror(dst_path);
+          g_error = 1;
+          return;
+        }
+      }
+    }
 
-    // set uid and gid
-    if(src_st->st_uid != dst_st.st_uid ||
-       src_st->st_gid != dst_st.st_gid
-    ) {
-      rc = chown(dst_path, src_st->st_uid, src_st->st_gid);
-      if(rc) {
-        perror(dst_path);
-        g_error = 1;
-        return;
+    if(g_preserve_ownership) {
+      if((g_euid == 0 && src_st->st_uid != dst_st.st_uid) ||
+         src_st->st_gid != dst_st.st_gid
+      ) {
+        uid_t uid = g_euid == 0 ? src_st->st_uid : (uid_t)-1;
+        rc = chown(dst_path, uid, src_st->st_gid);
+        if(rc) {
+          perror(dst_path);
+          g_error = 1;
+          return;
+        }
       }
     }
   }
@@ -452,16 +469,18 @@ static void sync_symlink(
     }
   }
 
-  // set uid and gid
-  if(!dst_exists ||
-     src_st->st_uid != dst_st.st_uid ||
-     src_st->st_gid != dst_st.st_gid
-  ) {
-    rc = lchown(dst_path, src_st->st_uid, src_st->st_gid);
-    if(rc) {
-      perror(dst_path);
-      g_error = 1;
-      return;
+  if(g_preserve_ownership) {
+    if(!dst_exists ||
+       (g_euid == 0 && src_st->st_uid != dst_st.st_uid) ||
+       src_st->st_gid != dst_st.st_gid
+    ) {
+      uid_t uid = g_euid == 0 ? src_st->st_uid : (uid_t)-1;
+      rc = lchown(dst_path, uid, src_st->st_gid);
+      if(rc) {
+        perror(dst_path);
+        g_error = 1;
+        return;
+      }
     }
   }
 }
@@ -478,6 +497,8 @@ static int traverse_dir_enter(
   int rc, dst_exists;
   struct stat dst_st;
   char dst_path[PATH_MAX];
+
+  if(g_one_file_system && g_dev != src_st->st_dev) return 0;
 
   p = src_path + t->src_root_len;
   strcpy(dst_path, t->dst_root);
@@ -604,37 +625,41 @@ static void * traverse_dir_exit(
 
   if(g_verbose > 1) printf("<<< %s/\n", src_path);
 
-  // set mode
-  if(!cont->dst_exists ||
-     cont->src_st.st_mode != cont->dst_st.st_mode
-  ) {
-    rc = chmod(dst_path, cont->src_st.st_mode);
+  if(g_preserve_mode) {
+    if(!cont->dst_exists ||
+       cont->src_st.st_mode != cont->dst_st.st_mode
+    ) {
+      rc = chmod(dst_path, cont->src_st.st_mode);
+      if(rc) {
+        perror(dst_path);
+        g_error = 1;
+        goto out;
+      }
+    }
+  }
+
+  if(g_preserve_ownership) {
+    if(!cont->dst_exists ||
+       (g_euid == 0 && cont->src_st.st_uid != cont->dst_st.st_uid) ||
+       cont->src_st.st_gid != cont->dst_st.st_gid
+    ) {
+      uid_t uid = g_euid == 0 ? cont->src_st.st_uid : (uid_t)-1;
+      rc = chown(dst_path, uid, cont->src_st.st_gid);
+      if(rc) {
+        perror(dst_path);
+        g_error = 1;
+        goto out;
+      }
+    }
+  }
+
+  if(g_preserve_mtime) {
+    rc = settimes(dst_path, src_st);
     if(rc) {
       perror(dst_path);
       g_error = 1;
       goto out;
     }
-  }
-
-  // set uid and gid
-  if(!cont->dst_exists ||
-     cont->src_st.st_uid != cont->dst_st.st_uid ||
-     cont->src_st.st_gid != cont->dst_st.st_gid
-  ) {
-    rc = chown(dst_path, cont->src_st.st_uid, cont->src_st.st_gid);
-    if(rc) {
-      perror(dst_path);
-      g_error = 1;
-      goto out;
-    }
-  }
-
-  // set mtime
-  rc = settimes(dst_path, src_st);
-  if(rc) {
-    perror(dst_path);
-    g_error = 1;
-    goto out;
   }
 
 out:
@@ -689,20 +714,36 @@ static void * traverse_error(
 }
 
 int main(int argc, char *argv[]) {
-  int opt, threads;
+  int rc, opt;
+  size_t threads;
   const char *src_path, *dst_path;
   struct traverse_arg t;
+  struct stat st;
 
   g_euid = geteuid();
   threads = DEFAULT_NTHREADS;
 
-  while((opt = getopt(argc, argv, "hvDj:sw:")) != -1) {
+  while((opt = getopt(argc, argv, "hvapotDj:sw:x")) != -1) {
     switch(opt) {
     case 'h':
       usage(stdout, argv[0]);
       exit(0);
     case 'v':
       g_verbose += 1;
+      break;
+    case 'a':
+      g_preserve_mode = 1;
+      g_preserve_ownership = 1;
+      g_preserve_mtime = 1;
+      break;
+    case 'p':
+      g_preserve_mode = 1;
+      break;
+    case 'o':
+      g_preserve_ownership = 1;
+      break;
+    case 't':
+      g_preserve_mtime = 1;
       break;
     case 'D':
       g_delete = 0;
@@ -729,6 +770,9 @@ int main(int argc, char *argv[]) {
         exit(2);
       }
       break;
+    case 'x':
+      g_one_file_system = 1;
+      break;
     default:
       usage(stderr, argv[0]);
       exit(2);
@@ -743,6 +787,16 @@ int main(int argc, char *argv[]) {
 
   src_path = argv[optind];
   dst_path = argv[optind+1];
+
+  rc = lstat(src_path, &st);
+  if(rc) {
+    perror(src_path);
+    exit(1);
+  }
+
+  if(g_one_file_system) {
+    g_dev = st.st_dev;
+  }
 
   t.src_root = src_path;
   t.dst_root = dst_path;
