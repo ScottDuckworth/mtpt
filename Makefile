@@ -2,12 +2,15 @@ CC = gcc
 CFLAGS = -Wall -O2 -pthread
 LDFLAGS = -pthread
 
-all: mtsync
+all: mtsync mtrm
 
 clean:
 	rm -f mtsync *.o
 
 mtsync: threadpool.o mtpt.o mtsync.o
+	$(CC) $^ $(LDFLAGS) -o $@
+
+mtrm: threadpool.o mtpt.o mtrm.o
 	$(CC) $^ $(LDFLAGS) -o $@
 
 mtpt-test: threadpool.o mtpt.o mtpt-test.o

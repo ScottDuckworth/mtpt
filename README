@@ -12,3 +12,9 @@ mtsync
 
 Used to synchronize one directory with another.  Similar to rsync, but it only
 works with local files, and with fewer bells and whistles.
+
+mtrm
+----
+
+Used to recursively delete files and directories.  Similar to rm -rf, just
+faster for very large numbers of files.

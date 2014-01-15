@@ -1,3 +1,4 @@
 *.o
 /mtsync
+/mtrm
 /mtpt-test
