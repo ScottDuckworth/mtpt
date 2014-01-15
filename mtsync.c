@@ -493,16 +493,23 @@ static int traverse_dir_enter(
 ) {
   struct traverse_arg *t = arg;
   struct traverse_continuation *cont;
-  const char *p;
+  const char *p, *rel_path;
   int rc, dst_exists;
   struct stat dst_st;
   char dst_path[PATH_MAX];
 
   if(g_one_file_system && g_dev != src_st->st_dev) return 0;
 
-  p = src_path + t->src_root_len;
   strcpy(dst_path, t->dst_root);
-  strcpy(dst_path + t->dst_root_len, p);
+  p = src_path + t->src_root_len;
+  if(*p) {
+    strcpy(dst_path + t->dst_root_len, p);
+    rel_path = p;
+    while(*p && *p == '/') ++p;
+    if(*p) rel_path = p;
+  } else {
+    rel_path = ".";
+  }
 
   if(g_verbose > 1) printf(">>> %s/\n", src_path);
 
@@ -526,6 +533,8 @@ static int traverse_dir_enter(
 
   // create dst
   if(!dst_exists) {
+    if(g_verbose) printf("%s/\n", rel_path);
+
     rc = mkdir(dst_path, 0700);
     if(rc && errno != EEXIST) {
       perror(dst_path);
