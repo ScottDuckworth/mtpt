@@ -7,10 +7,10 @@ all: mtsync mtrm
 clean:
 	rm -f mtsync *.o
 
-mtsync: threadpool.o mtpt.o mtsync.o
+mtsync: threadpool.o mtpt.o exclude.o mtsync.o
 	$(CC) $^ $(LDFLAGS) -o $@
 
-mtrm: threadpool.o mtpt.o mtrm.o
+mtrm: threadpool.o mtpt.o exclude.o mtrm.o
 	$(CC) $^ $(LDFLAGS) -o $@
 
 mtpt-test: threadpool.o mtpt.o mtpt-test.o

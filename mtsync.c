@@ -31,10 +31,10 @@
 #define _BSD_SOURCE
 #define _FILE_OFFSET_BITS 64
 #include "mtpt.h"
+#include "exclude.h"
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <fnmatch.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -152,40 +152,6 @@ static void unlink_dir(const char *path) {
     perror(path);
     g_error = 1;
   }
-}
-
-static int excluded(
-  const char * const *patterns,
-  size_t npatterns,
-  const char *path,
-  int isdir
-) {
-  size_t i, l;
-  const char *p, *tail;
-  char pattern[PATH_MAX];
-
-  for(i = 0; i < npatterns; ++i) {
-    p = patterns[i];
-    l = strlen(p);
-    if(p[l-1] == '/') {
-      if(!isdir) return 0;
-      strcpy(pattern, p);
-      pattern[--l] = '\0';
-      p = pattern;
-    }
-    if(p[0] == '/') {
-      if(fnmatch(p+1, path, FNM_PATHNAME) == 0) return 1;
-    } else {
-      if(fnmatch(p, path, FNM_PATHNAME) == 0) return 1;
-      tail = path;
-      while(*tail) {
-        if(*tail++ == '/') {
-          if(fnmatch(p, tail, FNM_PATHNAME) == 0) return 1;
-        }
-      }
-    }
-  }
-  return 0;
 }
 
 static inline int samemtime(const struct stat *a, const struct stat *b) {

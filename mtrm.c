@@ -29,13 +29,18 @@
  */
 
 #include "mtpt.h"
+#include "exclude.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 
 #define DEFAULT_NTHREADS 4
 
+static int g_error = 0;
 static int g_verbose = 0;
+static const char **g_exclude = NULL;
+static size_t g_exclude_count = 0;
 
 static void usage(FILE *file, const char *arg0) {
   fprintf(file,
@@ -44,7 +49,27 @@ static void usage(FILE *file, const char *arg0) {
     "  -h    Print this message\n"
     "  -v    Be verbose\n"
     "  -j N  Operate on N files at a time (default %d)\n"
+    "  -e P  Exclude files matching P\n"
     , arg0, DEFAULT_NTHREADS);
+}
+
+static int traverse_dir_enter(
+  void *arg,
+  const char *path,
+  const struct stat *st,
+  void **continuation
+) {
+  const char *rel_path;
+
+  rel_path = path + (size_t) arg;
+  if(*rel_path) {
+    ++rel_path;
+  } else {
+    rel_path = ".";
+  }
+  printf(":%s:\n", rel_path);
+
+  return !excluded(g_exclude, g_exclude_count, rel_path, 1);
 }
 
 static void * traverse_dir_exit(
@@ -59,15 +84,16 @@ static void * traverse_dir_exit(
   size_t i;
 
   for(i = 0; i < entries_count; ++i) {
-    if(entries[i]->data) return traverse_dir_exit;
+    if(entries[i]->data == NULL) return NULL;
   }
   rc = rmdir(path);
   if(rc) {
     perror(path);
-    return traverse_dir_exit;
+    g_error = 1;
+    return NULL;
   }
   if(g_verbose) printf("removed directory: `%s'\n", path);
-  return NULL;
+  return (void *) -1l;
 }
 
 static void * traverse_file(
@@ -76,14 +102,31 @@ static void * traverse_file(
   const struct stat *st
 ) {
   int rc;
-  
+  const char *rel_path;
+
+  rel_path = path + (size_t) arg;
+  if(*rel_path) {
+    ++rel_path;
+  } else {
+    const char *p;
+    p = rel_path = path;
+    while(*p) {
+      if(*p++ == '/') rel_path = p;
+    }
+  }
+  printf(":%s:\n", rel_path);
+
+  if(excluded(g_exclude, g_exclude_count, rel_path, 0))
+    return NULL;
+
   rc = unlink(path);
   if(rc) {
     perror(path);
-    return traverse_file;
+    g_error = 1;
+    return NULL;
   }
   if(g_verbose) printf("removed `%s'\n", path);
-  return NULL;
+  return (void *) -1l;
 }
 
 static void * traverse_error(
@@ -93,17 +136,17 @@ static void * traverse_error(
   void *continuation
 ) {
   perror(path);
-  return traverse_error;
+  g_error = 1;
+  return NULL;
 }
 
 int main(int argc, char **argv) {
-  int ret = 0, rc, opt;
+  int rc, opt;
   size_t threads;
-  void *data;
 
   threads = DEFAULT_NTHREADS;
 
-  while((opt = getopt(argc, argv, "hvj:")) != -1) {
+  while((opt = getopt(argc, argv, "hvj:e:")) != -1) {
     switch(opt) {
     case 'h':
       usage(stdout, argv[0]);
@@ -118,6 +161,10 @@ int main(int argc, char **argv) {
         exit(2);
       }
       break;
+    case 'e':
+      g_exclude = realloc(g_exclude, (g_exclude_count+1) * sizeof(char *));
+      g_exclude[g_exclude_count++] = optarg;
+      break;
     default:
       usage(stderr, argv[0]);
       exit(2);
@@ -129,18 +176,18 @@ int main(int argc, char **argv) {
       threads,
       MTPT_CONFIG_FILE_TASKS | MTPT_CONFIG_SORT,
       argv[optind],
-      NULL,
+      traverse_dir_enter,
       traverse_dir_exit,
       traverse_file,
       traverse_error,
-      NULL,
-      &data
+      (void *) strlen(argv[optind]),
+      NULL
     );
     if(rc) {
       perror(argv[optind]);
-      ret = 1;
+      g_error = 1;
     }
-    if(data) ret = 1;
   }
-  return ret;
+  if(g_exclude) free(g_exclude);
+  return g_error;
 }
