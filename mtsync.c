@@ -34,6 +34,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <fnmatch.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -67,6 +68,10 @@ static int g_preserve_mode = 0;
 static int g_preserve_ownership = 0;
 static int g_preserve_mtime = 0;
 static int g_delete = 1;
+static const char **g_exclude = NULL;
+static size_t g_exclude_count = 0;
+static const char **g_exclude_delete = NULL;
+static size_t g_exclude_delete_count = 0;
 #ifdef __linux__
 static int g_subsecond = 0;
 #endif
@@ -80,12 +85,14 @@ static void usage(FILE *file, const char *arg0) {
     "Options:\n"
     "  -h    Print this message\n"
     "  -v    Be verbose\n"
+    "  -j N  Copy N files at a time (default %d)\n"
     "  -a    Archive; equals -pot\n"
     "  -p    Preserve permissions\n"
     "  -o    Preserve ownership (only preserves user if root)\n"
     "  -t    Preserve modification times\n"
     "  -D    Do not delete files not in source from destination\n"
-    "  -j N  Copy N files at a time (default %d)\n"
+    "  -e P  Exclude files matching P\n"
+    "  -E P  Exclude and delete from destination files matching P\n"
 #ifdef __linux__
     "  -s    Use sub-second precision when comparing mtimes\n"
 #endif
@@ -147,6 +154,40 @@ static void unlink_dir(const char *path) {
   }
 }
 
+static int excluded(
+  const char * const *patterns,
+  size_t npatterns,
+  const char *path,
+  int isdir
+) {
+  size_t i, l;
+  const char *p, *tail;
+  char pattern[PATH_MAX];
+
+  for(i = 0; i < npatterns; ++i) {
+    p = patterns[i];
+    l = strlen(p);
+    if(p[l-1] == '/') {
+      if(!isdir) return 0;
+      strcpy(pattern, p);
+      pattern[--l] = '\0';
+      p = pattern;
+    }
+    if(p[0] == '/') {
+      if(fnmatch(p+1, path, FNM_PATHNAME) == 0) return 1;
+    } else {
+      if(fnmatch(p, path, FNM_PATHNAME) == 0) return 1;
+      tail = path;
+      while(*tail) {
+        if(*tail++ == '/') {
+          if(fnmatch(p, tail, FNM_PATHNAME) == 0) return 1;
+        }
+      }
+    }
+  }
+  return 0;
+}
+
 static inline int samemtime(const struct stat *a, const struct stat *b) {
   long int diff_s = a->st_mtime - b->st_mtime;
 
@@ -205,6 +246,17 @@ static void sync_file(
       return;
     }
     dst_exists = 0;
+  }
+
+  if(excluded(g_exclude_delete, g_exclude_delete_count, rel_path, 0)) {
+    if(dst_exists) {
+      if(S_ISDIR(dst_st.st_mode)) {
+        unlink_dir(dst_path);
+      } else {
+        unlink(dst_path);
+      }
+    }
+    return;
   }
 
   // remove dst if not a regular file
@@ -409,6 +461,17 @@ static void sync_symlink(
     dst_exists = 0;
   }
 
+  if(excluded(g_exclude_delete, g_exclude_delete_count, rel_path, 0)) {
+    if(dst_exists) {
+      if(S_ISDIR(dst_st.st_mode)) {
+        unlink_dir(dst_path);
+      } else {
+        unlink(dst_path);
+      }
+    }
+    return;
+  }
+
   // read src target
   src_len = readlink(src_path, src_target, PATH_MAX-1);
   if(src_len == -1) {
@@ -511,6 +574,8 @@ static int traverse_dir_enter(
     rel_path = ".";
   }
 
+  if(excluded(g_exclude, g_exclude_count, rel_path, 1)) return 0;
+
   if(g_verbose > 1) printf(">>> %s/\n", src_path);
 
   // stat dst
@@ -523,6 +588,17 @@ static int traverse_dir_enter(
       return 0;
     }
     dst_exists = 0;
+  }
+
+  if(excluded(g_exclude_delete, g_exclude_delete_count, rel_path, 1)) {
+    if(dst_exists) {
+      if(S_ISDIR(dst_st.st_mode)) {
+        unlink_dir(dst_path);
+      } else {
+        unlink(dst_path);
+      }
+    }
+    return 0;
   }
 
   // remove dst if not a directory
@@ -699,6 +775,8 @@ static void * traverse_file(
     }
   }
 
+  if(excluded(g_exclude, g_exclude_count, rel_path, 0)) return NULL;
+
   if(S_ISREG(src_st->st_mode)) {
     sync_file(src_st, src_path, dst_path, rel_path);
   } else if(S_ISLNK(src_st->st_mode)) {
@@ -732,13 +810,20 @@ int main(int argc, char *argv[]) {
   g_euid = geteuid();
   threads = DEFAULT_NTHREADS;
 
-  while((opt = getopt(argc, argv, "hvapotDj:sw:x")) != -1) {
+  while((opt = getopt(argc, argv, "hvj:apotDe:E:sw:x")) != -1) {
     switch(opt) {
     case 'h':
       usage(stdout, argv[0]);
       exit(0);
     case 'v':
       g_verbose += 1;
+      break;
+    case 'j':
+      threads = atoi(optarg);
+      if(threads <= 0) {
+        fprintf(stderr, "Error: number of threads (-j) must be a positive integer\n");
+        exit(2);
+      }
       break;
     case 'a':
       g_preserve_mode = 1;
@@ -757,12 +842,13 @@ int main(int argc, char *argv[]) {
     case 'D':
       g_delete = 0;
       break;
-    case 'j':
-      threads = atoi(optarg);
-      if(threads <= 0) {
-        fprintf(stderr, "Error: number of threads (-j) must be a positive integer\n");
-        exit(2);
-      }
+    case 'e':
+      g_exclude = realloc(g_exclude, (g_exclude_count+1) * sizeof(char *));
+      g_exclude[g_exclude_count++] = optarg;
+      break;
+    case 'E':
+      g_exclude_delete = realloc(g_exclude_delete, (g_exclude_delete_count+1) * sizeof(char *));
+      g_exclude_delete[g_exclude_delete_count++] = optarg;
       break;
     case 's':
 #ifdef __linux__
@@ -823,5 +909,7 @@ int main(int argc, char *argv[]) {
     NULL
   );
 
+  if(g_exclude) free(g_exclude);
+  if(g_exclude_delete) free(g_exclude_delete);
   exit(g_error);
 }
