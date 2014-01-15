@@ -67,7 +67,6 @@ static int traverse_dir_enter(
   } else {
     rel_path = ".";
   }
-  printf(":%s:\n", rel_path);
 
   return !excluded(g_exclude, g_exclude_count, rel_path, 1);
 }
@@ -114,7 +113,6 @@ static void * traverse_file(
       if(*p++ == '/') rel_path = p;
     }
   }
-  printf(":%s:\n", rel_path);
 
   if(excluded(g_exclude, g_exclude_count, rel_path, 0))
     return NULL;
