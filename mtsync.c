@@ -533,9 +533,7 @@ static int traverse_dir_enter(
   p = src_path + t->src_root_len;
   if(*p) {
     strcpy(dst_path + t->dst_root_len, p);
-    rel_path = p;
-    while(*p && *p == '/') ++p;
-    if(*p) rel_path = p;
+    rel_path = p + 1;
   } else {
     rel_path = ".";
   }
@@ -731,9 +729,7 @@ static void * traverse_file(
   p = src_path + t->src_root_len;
   if(*p) {
     strcpy(dst_path + t->dst_root_len, p);
-    rel_path = p;
-    while(*p && *p == '/') ++p;
-    if(*p) rel_path = p;
+    rel_path = p + 1;
   } else {
     p = rel_path = src_path;
     while(*p) {
