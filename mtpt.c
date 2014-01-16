@@ -388,7 +388,7 @@ int mtpt(
 ) {
   mtpt_t mtpt;
   struct stat st;
-  void *d;
+  void *d = NULL;
   mtpt_dir_task_t *root_task;
   int rc, ret = 0;
 
