@@ -169,6 +169,12 @@ int main(int argc, char **argv) {
     }
   }
 
+  if(argc == optind) {
+    fprintf(stderr, "Error: path not given\n");
+    usage(stderr, argv[0]);
+    exit(2);
+  }
+
   for(; optind < argc; ++optind) {
     rc = mtpt(
       threads,
