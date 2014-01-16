@@ -10,8 +10,8 @@ utilization and shorter completion times.
 mtsync
 ------
 
-Synchronizes one directory with another.  Similar to rsync, but it only for
-local files.
+Synchronizes one directory with another.  Similar to rsync, but only for local
+files.
 
 mtrm
 ----
