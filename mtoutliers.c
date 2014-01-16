@@ -229,29 +229,32 @@ int main(int argc, char **argv) {
     }
   }
 
-  if(argc - optind != 1) {
-    fprintf(stderr, "Error: incorrect number of arguments\n");
+  if(argc == optind) {
+    fprintf(stderr, "Error: path not given\n");
     usage(stderr, argv[0]);
     exit(2);
   }
 
-  rc = mtpt(
-    threads,
-    MTPT_CONFIG_FILE_TASKS | MTPT_CONFIG_SORT,
-    argv[optind],
-    traverse_dir_enter,
-    traverse_dir_exit,
-    traverse_file,
-    traverse_error,
-    (void *) strlen(argv[optind]),
-    (void **) &data
-  );
-  if(rc) {
-    perror(argv[optind]);
-    exit(1);
+  for(; optind < argc; ++optind) {
+    data = NULL;
+    rc = mtpt(
+      threads,
+      MTPT_CONFIG_FILE_TASKS | MTPT_CONFIG_SORT,
+      argv[optind],
+      traverse_dir_enter,
+      traverse_dir_exit,
+      traverse_file,
+      traverse_error,
+      (void *) strlen(argv[optind]),
+      (void **) &data
+    );
+    if(rc) {
+      perror(argv[optind]);
+      g_error = 1;
+    }
+    if(data) free(data);
   }
 
-  if(data) free(data);
   if(g_exclude) free(g_exclude);
   return g_error;
 }
