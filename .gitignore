@@ -1,4 +1,5 @@
 *.o
 /mtsync
 /mtrm
+/mtoutliers
 /mtpt-test
