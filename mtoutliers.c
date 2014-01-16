@@ -229,7 +229,7 @@ int main(int argc, char **argv) {
     }
   }
 
-  if(optind == argc) {
+  if(argc - optind != 1) {
     fprintf(stderr, "Error: incorrect number of arguments\n");
     usage(stderr, argv[0]);
     exit(2);
