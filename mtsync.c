@@ -859,7 +859,7 @@ int main(int argc, char *argv[]) {
   t.dst_root = dst_path;
   t.src_root_len = strlen(src_path);
   t.dst_root_len = strlen(dst_path);
-  mtpt(
+  rc = mtpt(
     threads,
     MTPT_CONFIG_FILE_TASKS | MTPT_CONFIG_SORT,
     src_path,
@@ -870,6 +870,10 @@ int main(int argc, char *argv[]) {
     &t,
     NULL
   );
+  if(rc) {
+    perror(src_path);
+    g_error = 1;
+  }
 
   if(g_exclude) free(g_exclude);
   if(g_exclude_delete) free(g_exclude_delete);
