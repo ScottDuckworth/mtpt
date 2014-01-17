@@ -156,14 +156,14 @@ err0:
 }
 
 int threadpool_add(struct threadpool *tp, void (*routine)(void *), void *arg) {
-  int rc;
+  int rc, ret = 0;
   struct threadpool_task *task;
 
   rc = pthread_mutex_lock(&tp->mutex);
   if(rc) return rc;
   if(tp->stop) {
-    pthread_mutex_unlock(&tp->mutex);
-    return EINVAL;
+    ret = EINVAL;
+    goto out;
   }
   if(tp->qmax) {
     while(tp->qcount == tp->qmax) {
@@ -174,9 +174,15 @@ int threadpool_add(struct threadpool *tp, void (*routine)(void *), void *arg) {
     size_t c, p;
     struct threadpool_task t;
     if(tp->qcount == tp->qsize) {
-      if(tp->qsize == ~(((size_t)-1) >> 1)) return ENOMEM;
+      if(tp->qsize == ~(((size_t)-1) >> 1)) {
+        ret = ENOMEM;
+        goto out;
+      }
       task = realloc(tp->q, sizeof(struct threadpool_task) * (tp->qsize << 1));
-      if(task == NULL) return errno;
+      if(task == NULL) {
+        ret = errno;
+        goto out;
+      }
       tp->q = task;
       tp->qsize <<= 1;
     }
@@ -195,11 +201,17 @@ int threadpool_add(struct threadpool *tp, void (*routine)(void *), void *arg) {
     size_t i, mask;
     mask = tp->qsize - 1;
     if(tp->qcount == tp->qsize) {
-      if(tp->qsize == ~(((size_t)-1) >> 1)) return ENOMEM;
+      if(tp->qsize == ~(((size_t)-1) >> 1)) {
+        ret = ENOMEM;
+        goto out;
+      }
       task = malloc(sizeof(struct threadpool_task) * (tp->qsize << 1));
-      if(task == NULL) return errno;
+      if(task == NULL) {
+        ret = errno;
+        goto out;
+      }
       for(i = 0; i < tp->qsize; ++i) {
-        task[i] = tp->q[(tp->qhead + tp->qcount + i) & mask];
+        task[i] = tp->q[(tp->qhead + i) & mask];
       }
       free(tp->q);
       tp->q = task;
@@ -213,8 +225,9 @@ int threadpool_add(struct threadpool *tp, void (*routine)(void *), void *arg) {
   task->arg = arg;
   if(tp->qcount++ == 0)
     pthread_cond_signal(&tp->consumer);
+out:
   pthread_mutex_unlock(&tp->mutex);
-  return 0;
+  return ret;
 }
 
 int threadpool_destroy(struct threadpool *tp) {
