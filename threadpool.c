@@ -88,69 +88,6 @@ static void * threadpool_consumer(void *arg) {
   }
 }
 
-static inline int ilog2(size_t val) {
-  int i;
-  assert(val != 0);
-  assert(val <= ~(((size_t)-1) >> 1));
-  for(i = -1; val; ++i) val >>= 1;
-  return i;
-}
-
-int threadpool_init(struct threadpool *tp, size_t nthreads, size_t qmax) {
-  return threadpool_init_prio(tp, nthreads, qmax, NULL);
-}
-
-int threadpool_init_prio(struct threadpool *tp, size_t nthreads, size_t qmax, int (*priority_cmp)(const struct threadpool_task *, const struct threadpool_task *)) {
-  int i, rc;
-
-  assert(nthreads > 0);
-
-  rc = pthread_mutex_init(&tp->mutex, NULL);
-  if(rc) goto err0;
-  rc = pthread_cond_init(&tp->producer, NULL);
-  if(rc) goto err1;
-  rc = pthread_cond_init(&tp->consumer, NULL);
-  if(rc) goto err2;
-
-  tp->stop = 0;
-  tp->nthreads = nthreads;
-  tp->running = 0;
-  tp->priority_cmp = priority_cmp;
-  tp->qsize = qmax == 0 ? 8 : 1 << (ilog2(qmax-1)+1);
-  tp->qhead = 0;
-  tp->qcount = 0;
-  tp->qmax = qmax;
-  tp->q = malloc(sizeof(struct threadpool_task) * tp->qsize);
-  if(!tp->q) goto err3;
-  tp->threads = malloc(sizeof(pthread_t) * nthreads);
-  if(!tp->threads) goto err4;
-  pthread_mutex_lock(&tp->mutex);
-  for(i = 0; i < nthreads; ++i) {
-    rc = pthread_create(&tp->threads[i], NULL, threadpool_consumer, tp);
-    if(rc) goto err5;
-  }
-  pthread_mutex_unlock(&tp->mutex);
-  return 0;
-
-err5:
-  pthread_mutex_unlock(&tp->mutex);
-  for(--i; i >= 0; --i) {
-    pthread_cancel(tp->threads[i]);
-    pthread_join(tp->threads[i], NULL);
-  }
-  free(tp->threads);
-err4:
-  free(tp->q);
-err3:
-  pthread_cond_destroy(&tp->consumer);
-err2:
-  pthread_cond_destroy(&tp->producer);
-err1:
-  pthread_mutex_destroy(&tp->mutex);
-err0:
-  return rc;
-}
-
 int threadpool_add(struct threadpool *tp, void (*routine)(void *), void *arg) {
   int rc, ret = 0;
   struct threadpool_task *task;
@@ -224,6 +161,69 @@ int threadpool_add(struct threadpool *tp, void (*routine)(void *), void *arg) {
 out:
   pthread_mutex_unlock(&tp->mutex);
   return ret;
+}
+
+static inline int ilog2(size_t val) {
+  int i;
+  assert(val != 0);
+  assert(val <= ~(((size_t)-1) >> 1));
+  for(i = -1; val; ++i) val >>= 1;
+  return i;
+}
+
+int threadpool_init(struct threadpool *tp, size_t nthreads, size_t qmax) {
+  return threadpool_init_prio(tp, nthreads, qmax, NULL);
+}
+
+int threadpool_init_prio(struct threadpool *tp, size_t nthreads, size_t qmax, int (*priority_cmp)(const struct threadpool_task *, const struct threadpool_task *)) {
+  int i, rc;
+
+  assert(nthreads > 0);
+
+  rc = pthread_mutex_init(&tp->mutex, NULL);
+  if(rc) goto err0;
+  rc = pthread_cond_init(&tp->producer, NULL);
+  if(rc) goto err1;
+  rc = pthread_cond_init(&tp->consumer, NULL);
+  if(rc) goto err2;
+
+  tp->stop = 0;
+  tp->nthreads = nthreads;
+  tp->running = 0;
+  tp->priority_cmp = priority_cmp;
+  tp->qsize = qmax == 0 ? 8 : 1 << (ilog2(qmax-1)+1);
+  tp->qhead = 0;
+  tp->qcount = 0;
+  tp->qmax = qmax;
+  tp->q = malloc(sizeof(struct threadpool_task) * tp->qsize);
+  if(!tp->q) goto err3;
+  tp->threads = malloc(sizeof(pthread_t) * nthreads);
+  if(!tp->threads) goto err4;
+  pthread_mutex_lock(&tp->mutex);
+  for(i = 0; i < nthreads; ++i) {
+    rc = pthread_create(&tp->threads[i], NULL, threadpool_consumer, tp);
+    if(rc) goto err5;
+  }
+  pthread_mutex_unlock(&tp->mutex);
+  return 0;
+
+err5:
+  pthread_mutex_unlock(&tp->mutex);
+  for(--i; i >= 0; --i) {
+    pthread_cancel(tp->threads[i]);
+    pthread_join(tp->threads[i], NULL);
+  }
+  free(tp->threads);
+err4:
+  free(tp->q);
+err3:
+  pthread_cond_destroy(&tp->consumer);
+err2:
+  pthread_cond_destroy(&tp->producer);
+err1:
+  pthread_mutex_destroy(&tp->mutex);
+err0:
+  return rc;
 }
 
 int threadpool_destroy(struct threadpool *tp) {
