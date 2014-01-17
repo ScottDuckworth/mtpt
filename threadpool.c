@@ -47,10 +47,43 @@ static void * threadpool_consumer(void *arg) {
       }
       pthread_cond_wait(&tp->consumer, &tp->mutex);
     }
-    task = tp->q[tp->qhead];
-    tp->qhead = (tp->qhead + 1) & (tp->qsize - 1);
     if(tp->qcount-- == tp->qmax)
       pthread_cond_signal(&tp->producer);
+    if(tp->priority_cmp) {
+      int rc;
+      size_t c, p, l, r;
+      task = tp->q[0];
+      c = tp->qcount;
+      if(c) {
+        p = 0;
+        while((l = (p << 1) | 1) < tp->qcount) {
+          r = (p << 1) + 2;
+          rc = (*tp->priority_cmp)(&tp->q[l], &tp->q[c]);
+          if(rc > 0) {
+            rc = (*tp->priority_cmp)(&tp->q[l], &tp->q[r]);
+            if(rc > 0) {
+              tp->q[p] = tp->q[l];
+              p = l;
+            } else {
+              tp->q[p] = tp->q[r];
+              p = r;
+            }
+          } else {
+            rc = (*tp->priority_cmp)(&tp->q[r], &tp->q[c]);
+            if(rc > 0) {
+              tp->q[p] = tp->q[r];
+              p = r;
+            } else {
+              break;
+            }
+          }
+        }
+        tp->q[p] = tp->q[c];
+      }
+    } else {
+      task = tp->q[tp->qhead];
+      tp->qhead = (tp->qhead + 1) & (tp->qsize - 1);
+    }
     ++tp->running;
     pthread_mutex_unlock(&tp->mutex);
     (*task.routine)(task.arg);
@@ -68,6 +101,10 @@ static inline int ilog2(size_t val) {
 }
 
 int threadpool_init(struct threadpool *tp, size_t nthreads, size_t qmax) {
+  return threadpool_init_prio(tp, nthreads, qmax, NULL);
+}
+
+int threadpool_init_prio(struct threadpool *tp, size_t nthreads, size_t qmax, int (*priority_cmp)(const struct threadpool_task *, const struct threadpool_task *)) {
   int i, rc;
 
   assert(nthreads > 0);
@@ -82,6 +119,7 @@ int threadpool_init(struct threadpool *tp, size_t nthreads, size_t qmax) {
   tp->stop = 0;
   tp->nthreads = nthreads;
   tp->running = 0;
+  tp->priority_cmp = priority_cmp;
   tp->qsize = qmax == 0 ? 8 : 1 << (ilog2(qmax-1)+1);
   tp->qhead = 0;
   tp->qcount = 0;
@@ -119,7 +157,6 @@ err0:
 
 int threadpool_add(struct threadpool *tp, void (*routine)(void *), void *arg) {
   int rc;
-  size_t i, mask;
   struct threadpool_task *task;
 
   rc = pthread_mutex_lock(&tp->mutex);
@@ -128,8 +165,35 @@ int threadpool_add(struct threadpool *tp, void (*routine)(void *), void *arg) {
     pthread_mutex_unlock(&tp->mutex);
     return EINVAL;
   }
-  mask = tp->qsize - 1;
-  if(tp->qmax == 0) {
+  if(tp->qmax) {
+    while(tp->qcount == tp->qmax) {
+      pthread_cond_wait(&tp->producer, &tp->mutex);
+    }
+  }
+  if(tp->priority_cmp) {
+    size_t c, p;
+    struct threadpool_task t;
+    if(tp->qcount == tp->qsize) {
+      if(tp->qsize == ~(((size_t)-1) >> 1)) return ENOMEM;
+      task = realloc(tp->q, sizeof(struct threadpool_task) * (tp->qsize << 1));
+      if(task == NULL) return errno;
+      tp->q = task;
+      tp->qsize <<= 1;
+    }
+    t.routine = routine;
+    t.arg = arg;
+    c = tp->qcount;
+    while(c) {
+      p = (c - 1) >> 1;
+      rc = (*tp->priority_cmp)(&t, &tp->q[p]);
+      if(rc <= 0) break;
+      tp->q[c] = tp->q[p];
+      c = p;
+    }
+    task = &tp->q[c];
+  } else {
+    size_t i, mask;
+    mask = tp->qsize - 1;
     if(tp->qcount == tp->qsize) {
       if(tp->qsize == ~(((size_t)-1) >> 1)) return ENOMEM;
       task = malloc(sizeof(struct threadpool_task) * (tp->qsize << 1));
@@ -143,12 +207,8 @@ int threadpool_add(struct threadpool *tp, void (*routine)(void *), void *arg) {
       tp->qhead = 0;
       mask = tp->qsize - 1;
     }
-  } else {
-    while(tp->qcount == tp->qmax) {
-      pthread_cond_wait(&tp->producer, &tp->mutex);
-    }
+    task = &tp->q[(tp->qhead + tp->qcount) & mask];
   }
-  task = &tp->q[(tp->qhead + tp->qcount) & mask];
   task->routine = routine;
   task->arg = arg;
   if(tp->qcount++ == 0)

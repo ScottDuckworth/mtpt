@@ -54,7 +54,14 @@ typedef struct mtpt {
   pthread_cond_t finished_cond;
 } mtpt_t;
 
+typedef enum mtpt_task_type {
+  TASK_TYPE_DIR_ENTER,
+  TASK_TYPE_FILE,
+  TASK_TYPE_DIR_EXIT
+} mtpt_task_type_t;
+
 typedef struct mtpt_dir_task {
+  mtpt_task_type_t type;
   pthread_mutex_t mutex;
   mtpt_t *mtpt;
   void **data;
@@ -68,6 +75,7 @@ typedef struct mtpt_dir_task {
 } mtpt_dir_task_t;
 
 typedef struct mtpt_file_task {
+  mtpt_task_type_t type;
   mtpt_t *mtpt;
   void **data;
   struct mtpt_dir_task *parent;
@@ -89,6 +97,7 @@ static mtpt_file_task_t * mtpt_file_task_new(const char *path) {
 
   task = malloc(sizeof(mtpt_file_task_t) + strlen(path));
   if(!task) return NULL;
+  task->type = TASK_TYPE_FILE;
   strcpy(task->path, path);
   return task;
 }
@@ -105,6 +114,7 @@ static mtpt_dir_task_t * mtpt_dir_task_new(const char *path) {
     errno = rc;
     return NULL;
   }
+  task->type = TASK_TYPE_DIR_ENTER;
   task->continuation = NULL;
   task->entries = NULL;
   task->entries_count = 0;
@@ -146,6 +156,7 @@ static void mtpt_dir_task_child_finished(mtpt_dir_task_t *task) {
 
   pthread_mutex_lock(&task->mutex);
   if(--task->children == 0) {
+    task->type = TASK_TYPE_DIR_EXIT;
     rc = threadpool_add(&mtpt->tp, mtpt_dir_exit_task_handler, task);
     if(rc) {
       /* 
@@ -375,6 +386,27 @@ file_task_new_fail:
   }
 }
 
+static int mtpt_task_priority_cmp(
+  const struct threadpool_task *a,
+  const struct threadpool_task *b
+) {
+  mtpt_task_type_t *type_a = a->arg;
+  mtpt_task_type_t *type_b = b->arg;
+  int diff = *type_a - *type_b;
+  if(diff) return diff;
+  if(*type_a == TASK_TYPE_FILE) {
+    const mtpt_file_task_t *task_a = a->arg;
+    if(!(task_a->mtpt->config & MTPT_CONFIG_SORT)) return 0;
+    const mtpt_file_task_t *task_b = b->arg;
+    return strcmp(task_b->path, task_a->path);
+  } else {
+    const mtpt_dir_task_t *task_a = a->arg;
+    if(!(task_a->mtpt->config & MTPT_CONFIG_SORT)) return 0;
+    const mtpt_dir_task_t *task_b = b->arg;
+    return strcmp(task_b->path, task_a->path);
+  }
+}
+
 int mtpt(
   size_t nthreads,
   int config,
@@ -424,7 +456,7 @@ int mtpt(
     ret = -1;
     goto out2;
   }
-  rc = threadpool_init(&mtpt.tp, nthreads, 0);
+  rc = threadpool_init_prio(&mtpt.tp, nthreads, 0, mtpt_task_priority_cmp);
   if(rc) {
     errno = rc;
     ret = -1;

@@ -65,6 +65,8 @@ struct threadpool {
   /// thread array
   pthread_t *threads;
 
+  int (*priority_cmp)(const struct threadpool_task *, const struct threadpool_task *);
+
   /// task queue
   struct threadpool_task *q;
   size_t qsize;
@@ -75,6 +77,7 @@ struct threadpool {
 
 /// initialize a threadpool
 int threadpool_init(struct threadpool *tp, size_t nthreads, size_t qmax);
+int threadpool_init_prio(struct threadpool *tp, size_t nthreads, size_t qmax, int (*priority_cmp)(const struct threadpool_task *, const struct threadpool_task *));
 
 /// add a task to a threadpool
 int threadpool_add(struct threadpool *tp, void (*routine)(void *), void *arg);
