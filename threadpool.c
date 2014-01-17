@@ -50,27 +50,23 @@ static void * threadpool_consumer(void *arg) {
     if(tp->qcount-- == tp->qmax)
       pthread_cond_signal(&tp->producer);
     if(tp->priority_cmp) {
-      int rc;
       size_t c, p, l, r;
       task = tp->q[0];
       c = tp->qcount;
       if(c) {
         p = 0;
-        while((l = (p << 1) | 1) < tp->qcount) {
+        while((l = (p << 1) | 1) < c) {
           r = (p << 1) + 2;
-          rc = (*tp->priority_cmp)(&tp->q[l], &tp->q[c]);
-          if(rc > 0) {
-            rc = (*tp->priority_cmp)(&tp->q[l], &tp->q[r]);
-            if(rc > 0) {
-              tp->q[p] = tp->q[l];
-              p = l;
-            } else {
+          if((*tp->priority_cmp)(&tp->q[l], &tp->q[c]) > 0) {
+            if(r < c && (*tp->priority_cmp)(&tp->q[r], &tp->q[l]) > 0) {
               tp->q[p] = tp->q[r];
               p = r;
+            } else {
+              tp->q[p] = tp->q[l];
+              p = l;
             }
           } else {
-            rc = (*tp->priority_cmp)(&tp->q[r], &tp->q[c]);
-            if(rc > 0) {
+            if(r < c && (*tp->priority_cmp)(&tp->q[r], &tp->q[c]) > 0) {
               tp->q[p] = tp->q[r];
               p = r;
             } else {
