@@ -48,10 +48,9 @@ typedef struct mtpt {
   mtpt_error_method_t error_method;
   void *arg;
   int config;
-  int finished;
   size_t spinlock_countdown;
   pthread_mutex_t mutex;
-  pthread_cond_t finished_cond;
+  pthread_barrier_t finished;
 } mtpt_t;
 
 typedef enum mtpt_task_type {
@@ -86,10 +85,7 @@ typedef struct mtpt_file_task {
 static void mtpt_dir_exit_task_handler(void *arg);
 
 static void mtpt_root_task_finished(mtpt_t *mtpt) {
-  pthread_mutex_lock(&mtpt->mutex);
-  mtpt->finished = 1;
-  pthread_cond_signal(&mtpt->finished_cond);
-  pthread_mutex_unlock(&mtpt->mutex);
+  pthread_barrier_wait(&mtpt->finished);
 }
 
 static mtpt_file_task_t * mtpt_file_task_new(const char *path) {
@@ -450,7 +446,7 @@ int mtpt(
     ret = -1;
     goto out1;
   }
-  rc = pthread_cond_init(&mtpt.finished_cond, NULL);
+  rc = pthread_barrier_init(&mtpt.finished, NULL, 2);
   if(rc) {
     errno = rc;
     ret = -1;
@@ -468,7 +464,6 @@ int mtpt(
   mtpt.error_method = error_method;
   mtpt.arg = arg;
   mtpt.config = config;
-  mtpt.finished = 0;
   mtpt.spinlock_countdown = nthreads;
 
   // 3...2...1...GO!
@@ -481,18 +476,14 @@ int mtpt(
   root_task = NULL;
 
   // wait for all tasks to finish
-  pthread_mutex_lock(&mtpt.mutex);
-  while(!mtpt.finished) {
-    pthread_cond_wait(&mtpt.finished_cond, &mtpt.mutex);
-  }
-  pthread_mutex_unlock(&mtpt.mutex);
+  pthread_barrier_wait(&mtpt.finished);
 
   if(data) *data = d;
 
 out4:
   threadpool_destroy(&mtpt.tp);
 out3:
-  pthread_cond_destroy(&mtpt.finished_cond);
+  pthread_barrier_destroy(&mtpt.finished);
 out2:
   pthread_mutex_destroy(&mtpt.mutex);
 out1:
