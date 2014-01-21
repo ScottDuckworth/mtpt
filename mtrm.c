@@ -61,7 +61,7 @@ static int traverse_dir_enter(
 ) {
   const char *rel_path;
 
-  rel_path = path + (size_t) arg;
+  rel_path = path + *((size_t *) arg);
   if(*rel_path) {
     ++rel_path;
   } else {
@@ -103,7 +103,7 @@ static void * traverse_file(
   int rc;
   const char *rel_path;
 
-  rel_path = path + (size_t) arg;
+  rel_path = path + *((size_t *) arg);
   if(*rel_path) {
     ++rel_path;
   } else {
@@ -140,7 +140,7 @@ static void * traverse_error(
 
 int main(int argc, char **argv) {
   int rc, opt;
-  size_t threads;
+  size_t threads, l;
 
   threads = DEFAULT_NTHREADS;
 
@@ -176,6 +176,7 @@ int main(int argc, char **argv) {
   }
 
   for(; optind < argc; ++optind) {
+    l = strlen(argv[optind]);
     rc = mtpt(
       threads,
       MTPT_CONFIG_FILE_TASKS | MTPT_CONFIG_SORT,
@@ -184,7 +185,7 @@ int main(int argc, char **argv) {
       traverse_dir_exit,
       traverse_file,
       traverse_error,
-      (void *) strlen(argv[optind]),
+      &l,
       NULL
     );
     if(rc) {
