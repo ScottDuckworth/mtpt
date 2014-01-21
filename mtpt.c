@@ -1,21 +1,21 @@
 /*
  * Copyright (c) 2014, Clemson University
  * All rights reserved.
- * 
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
- * 
+ *
  * * Redistributions of source code must retain the above copyright notice, this
  *   list of conditions and the following disclaimer.
- * 
+ *
  * * Redistributions in binary form must reproduce the above copyright notice,
  *   this list of conditions and the following disclaimer in the documentation
  *   and/or other materials provided with the distribution.
- * 
+ *
  * * Neither the name of Clemson University nor the names of its
  *   contributors may be used to endorse or promote products derived from
  *   this software without specific prior written permission.
- * 
+ *
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
  * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
@@ -155,7 +155,7 @@ static void mtpt_dir_task_child_finished(mtpt_dir_task_t *task) {
     task->type = TASK_TYPE_DIR_EXIT;
     rc = threadpool_add(&mtpt->tp, mtpt_dir_exit_task_handler, task);
     if(rc) {
-      /* 
+      /*
        * Getting here is bad.  This task has no more children and needs to be
        * put back in the queue so that its dir_exit_method can be run, but
        * there's not enough resources to add it back to the queue.  This will
