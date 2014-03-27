@@ -203,7 +203,16 @@ static void mtpt_file_task_handler(void *arg) {
   mtpt_t *mtpt = task->mtpt;
 
   if(mtpt->file_method) {
-    *task->data = (*mtpt->file_method)(mtpt->arg, task->path, &task->st);
+    void *continuation = NULL;
+    if(task->parent) {
+      continuation = task->parent->continuation;
+    }
+    *task->data = (*mtpt->file_method)(
+      mtpt->arg,
+      task->path,
+      &task->st,
+      continuation
+    );
   }
 
   // files (non-directories) will never be the root task and will always
@@ -250,7 +259,17 @@ static void mtpt_dir_enter_task_handler(void *arg) {
   int rc, no_children;
 
   if(mtpt->dir_enter_method) {
-    rc = (*mtpt->dir_enter_method)(mtpt->arg, task->path, &task->st, &task->continuation);
+    void *pcontinuation = NULL;
+    if(task->parent) {
+      pcontinuation = task->parent->continuation;
+    }
+    rc = (*mtpt->dir_enter_method)(
+      mtpt->arg,
+      task->path,
+      &task->st,
+      pcontinuation,
+      &task->continuation
+    );
     if(!rc) {
       if(task->parent) {
         mtpt_dir_task_child_finished(task->parent);
@@ -371,7 +390,11 @@ file_task_new_fail:
       }
     } else {
       if(mtpt->file_method) {
-        entry->data = (*mtpt->file_method)(mtpt->arg, path, &st);
+        void *continuation = NULL;
+        if(task->parent) {
+          continuation = task->parent->continuation;
+        }
+        entry->data = (*mtpt->file_method)(mtpt->arg, path, &st, continuation);
       }
     }
   }
@@ -426,7 +449,7 @@ int mtpt(
 
   // if the root path is not a directory, just handle it in this thread
   if(!S_ISDIR(st.st_mode)) {
-    d = (*file_method)(arg, path, &st);
+    d = (*file_method)(arg, path, &st, NULL);
     if(data) *data = d;
     return 0;
   }

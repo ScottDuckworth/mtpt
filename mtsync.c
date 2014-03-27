@@ -518,6 +518,7 @@ static int traverse_dir_enter(
   void *arg,
   const char *src_path,
   const struct stat *src_st,
+  void *pcontinuation,
   void **continuation
 ) {
   struct traverse_arg *t = arg;
@@ -719,7 +720,8 @@ out:
 static void * traverse_file(
   void *arg,
   const char *src_path,
-  const struct stat *src_st
+  const struct stat *src_st,
+  void *continuation
 ) {
   struct traverse_arg *t = arg;
   const char *p, *rel_path;

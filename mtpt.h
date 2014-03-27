@@ -68,8 +68,12 @@ typedef struct mtpt_dir_entry {
  * @param st
  * The stat of the directory.
  *
+ * @param pcontinuation
+ * The continuation set by the parent mtpt_dir_enter_method_t, or NULL if
+ * there is no parent.
+ *
  * @param[out] continuation
- * Can be used to pass data to the mtpt_dir_exit_method_t callback.
+ * Can be set to pass data to the mtpt_dir_exit_method_t callback.
  *
  * @return Non-zero if traversal of this directory is desired.
  */
@@ -77,6 +81,7 @@ typedef int (*mtpt_dir_enter_method_t)(
   void *arg,
   const char *path,
   const struct stat *st,
+  void *pcontinuation,
   void **continuation
 );
 
@@ -131,7 +136,8 @@ typedef void * (*mtpt_dir_exit_method_t)(
 typedef void * (*mtpt_file_method_t)(
   void *arg,
   const char *path,
-  const struct stat *st
+  const struct stat *st,
+  void *continuation
 );
 
 /**

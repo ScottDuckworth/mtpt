@@ -13,6 +13,7 @@ static int dir_enter(
   void *arg,
   const char *path,
   const struct stat *st,
+  void *pcontinuation,
   void **continuation
 ) {
   printf(">>> %s\n", path);
@@ -51,7 +52,12 @@ static void * dir_exit(
   return t;
 }
 
-static void * file(void *arg, const char *path, const struct stat *st) {
+static void * file(
+  void *arg,
+  const char *path,
+  const struct stat *st,
+  void *continuation
+) {
   struct totals *t = malloc(sizeof(struct totals));
   t->filesize = 0;
   t->dirs = 0;
