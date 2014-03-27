@@ -1,12 +1,23 @@
 CC = gcc
 CFLAGS = -Wall -O2 -pthread
 LDFLAGS = -pthread
+INSTALL_PROGRAM = install
+DESTDIR = /usr/local
+bindir = /bin
 ALL_TARGETS = mtsync mtrm mtoutliers mtdu
+
+.PHONY: all clean install
 
 all: $(ALL_TARGETS)
 
 clean:
 	rm -f $(ALL_TARGETS) *.o
+
+install: $(ALL_TARGETS)
+	$(INSTALL_PROGRAM) mtsync $(DESTDIR)$(bindir)/mtsync
+	$(INSTALL_PROGRAM) mtrm $(DESTDIR)$(bindir)/mtrm
+	$(INSTALL_PROGRAM) mtoutliers $(DESTDIR)$(bindir)/mtoutliers
+	$(INSTALL_PROGRAM) mtdu $(DESTDIR)$(bindir)/mtdu
 
 mtsync: threadpool.o mtpt.o exclude.o mtsync.o
 	$(CC) $^ $(LDFLAGS) -o $@
