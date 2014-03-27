@@ -19,7 +19,12 @@ mtrm
 Recursively deletes files and directories.  Similar to rm -rf.
 
 mtoutliers
------
+----------
 
 Finds files or directories that stand out in their directory by size, either
 greater than or less than some factor of the average size.
+
+mtdu
+----
+
+Report disk usage.  Similar to du.
