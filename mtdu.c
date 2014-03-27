@@ -63,7 +63,7 @@ struct file_data {
 
 static void usage(FILE *file, const char *arg0) {
   fprintf(file,
-    "Usage: %s [options] path ...\n"
+    "Usage: %s [options] [path] ...\n"
     "Options:\n"
     "  -H    Print this message\n"
     "  -j N  Operate on N files at a time (default %d)\n"
