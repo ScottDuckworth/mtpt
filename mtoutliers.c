@@ -242,7 +242,7 @@ int main(int argc, char **argv) {
     l = strlen(argv[optind]);
     rc = mtpt(
       threads,
-      MTPT_CONFIG_FILE_TASKS | MTPT_CONFIG_SORT,
+      MTPT_CONFIG_SORT,
       argv[optind],
       traverse_dir_enter,
       traverse_dir_exit,
