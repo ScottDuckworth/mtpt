@@ -234,14 +234,15 @@ static void process_path(const char *path, size_t threads) {
   int rc;
   size_t l = strlen(path);
   struct file_data *data = NULL;
+  struct stat st;
+
+  rc = lstat(path, &st);
+  if(rc) {
+    perror(path);
+    exit(1);
+  }
 
   if(g_one_file_system) {
-    struct stat st;
-    rc = lstat(path, &st);
-    if(rc) {
-      perror(path);
-      exit(1);
-    }
     g_dev = st.st_dev;
   }
 
@@ -261,7 +262,7 @@ static void process_path(const char *path, size_t threads) {
     g_error = 1;
   }
   if(data) {
-    if(g_summarize) {
+    if(g_summarize || !S_ISDIR(st.st_mode)) {
       print_size(data->size, path);
     }
     g_total += data->size;
