@@ -161,13 +161,13 @@ static inline int samemtime(const struct stat *a, const struct stat *b) {
   if(g_subsecond) {
     long int diff_ns = a->st_mtim.tv_nsec - b->st_mtim.tv_nsec;
     if(g_modify_window) {
-      if(diff_ns != 0) {
+      if(labs(diff_ns) >= 1000) {
         if(diff_ns < 0) diff_s -= 1;
         if(diff_s < 0) diff_s = -diff_s - 1;
       }
       return diff_s < g_modify_window;
     } else {
-      return diff_s == 0 && diff_ns == 0;
+      return diff_s == 0 && labs(diff_ns) < 1000;
     }
   }
 #endif
