@@ -514,6 +514,95 @@ static void sync_symlink(
   }
 }
 
+static void sync_special(
+  const struct stat *src_st,
+  const char *src_path,
+  const char *dst_path,
+  const char *rel_path,
+  mode_t fmt,
+  int usedev
+) {
+  int rc, dst_exists;
+  struct stat dst_st;
+
+  // stat dst
+  rc = lstat(dst_path, &dst_st);
+  dst_exists = 1;
+  if(rc) {
+    if(errno != ENOENT) {
+      perror(dst_path);
+      g_error = 1;
+      return;
+    }
+    dst_exists = 0;
+  }
+
+  if(excluded(g_exclude_delete, g_exclude_delete_count, rel_path, 0)) {
+    if(dst_exists) {
+      if(S_ISDIR(dst_st.st_mode)) {
+        unlink_dir(dst_path);
+      } else {
+        unlink(dst_path);
+      }
+    }
+    return;
+  }
+
+  // remove dst if format differs
+  if(dst_exists && (S_IFMT & dst_st.st_mode) != fmt) {
+    if(S_ISDIR(dst_st.st_mode)) {
+      unlink_dir(dst_path);
+    } else {
+      unlink(dst_path);
+    }
+    dst_exists = 0;
+  }
+
+  if(usedev) {
+    if(dst_exists && src_st->st_dev != dst_st.st_dev) {
+      unlink(dst_path);
+      dst_exists = 0;
+    }
+  }
+
+  // create dst
+  if(!dst_exists) {
+    if(g_verbose) printf("%s\n", rel_path);
+    if(usedev) {
+      rc = mknod(dst_path, src_st->st_mode, src_st->st_dev);
+    } else {
+      rc = mknod(dst_path, src_st->st_mode, 0);
+    }
+    if(rc) {
+      perror(dst_path);
+      g_error = 1;
+      return;
+    }
+  } else if(g_preserve_mode && src_st->st_mode != dst_st.st_mode) {
+    rc = chmod(dst_path, src_st->st_mode);
+    if(rc) {
+      perror(dst_path);
+      g_error = 1;
+      return;
+    }
+  }
+
+  if(g_preserve_ownership) {
+    if(!dst_exists ||
+       (g_euid == 0 && src_st->st_uid != dst_st.st_uid) ||
+       src_st->st_gid != dst_st.st_gid
+    ) {
+      uid_t uid = g_euid == 0 ? src_st->st_uid : (uid_t)-1;
+      rc = chown(dst_path, uid, src_st->st_gid);
+      if(rc) {
+        perror(dst_path);
+        g_error = 1;
+        return;
+      }
+    }
+  }
+}
+
 static int traverse_dir_enter(
   void *arg,
   const char *src_path,
@@ -745,6 +834,14 @@ static void * traverse_file(
     sync_file(src_st, src_path, dst_path, rel_path);
   } else if(S_ISLNK(src_st->st_mode)) {
     sync_symlink(src_st, src_path, dst_path, rel_path);
+  } else if(S_ISFIFO(src_st->st_mode)) {
+    sync_special(src_st, src_path, dst_path, rel_path, S_IFIFO, 0);
+  } else if(S_ISBLK(src_st->st_mode)) {
+    sync_special(src_st, src_path, dst_path, rel_path, S_IFBLK, 1);
+  } else if(S_ISCHR(src_st->st_mode)) {
+    sync_special(src_st, src_path, dst_path, rel_path, S_IFCHR, 1);
+  } else if(S_ISSOCK(src_st->st_mode)) {
+    sync_special(src_st, src_path, dst_path, rel_path, S_IFSOCK, 0);
   } else {
     fprintf(stderr, "file type not supported: %s\n", rel_path);
     g_error = 1;
