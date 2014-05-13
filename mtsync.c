@@ -30,6 +30,7 @@
 
 #define _BSD_SOURCE
 #define _FILE_OFFSET_BITS 64
+#include <pthread.h>
 #include "mtpt.h"
 #include "exclude.h"
 #include <dirent.h>
@@ -61,12 +62,21 @@ struct traverse_continuation {
   struct stat src_st;
 };
 
+struct hardlink_entry {
+  dev_t src_dev;
+  ino_t src_ino;
+  dev_t dst_dev;
+  ino_t dst_ino;
+  char *dst_path;
+};
+
 static uid_t g_euid;
 static int g_error = 0;
 static int g_verbose = 0;
 static int g_preserve_mode = 0;
 static int g_preserve_ownership = 0;
 static int g_preserve_mtime = 0;
+static int g_preserve_hardlinks = 0;
 static int g_delete = 1;
 static const char **g_exclude = NULL;
 static size_t g_exclude_count = 0;
@@ -78,6 +88,9 @@ static int g_subsecond = 0;
 static int g_modify_window = 0;
 static int g_one_file_system = 0;
 static dev_t g_dev;
+static struct hardlink_entry **g_hardlinks;
+static size_t g_hardlinks_size, g_hardlinks_count;
+static pthread_mutex_t g_hardlinks_mutex;
 
 static void usage(FILE *file, const char *arg0) {
   fprintf(file,
@@ -90,6 +103,7 @@ static void usage(FILE *file, const char *arg0) {
     "  -p    Preserve permissions\n"
     "  -o    Preserve ownership (only preserves user if root)\n"
     "  -t    Preserve modification times\n"
+    "  -H    Preserve hard links\n"
     "  -D    Do not delete files not in source from destination\n"
     "  -e P  Exclude files matching P\n"
     "  -E P  Exclude and delete from destination files matching P\n"
@@ -99,6 +113,24 @@ static void usage(FILE *file, const char *arg0) {
     "  -w S  mtime can be within S seconds to assume equal\n"
     "  -x    Do not cross file system boundaries\n"
     , arg0, DEFAULT_NTHREADS);
+}
+
+static void *xmalloc(size_t size) {
+  void *p = malloc(size);
+  if(p == NULL) {
+    perror(NULL);
+    exit(EXIT_FAILURE);
+  }
+  return p;
+}
+
+static void *xrealloc(void *ptr, size_t size) {
+  void *p = realloc(ptr, size);
+  if(p == NULL) {
+    perror(NULL);
+    exit(EXIT_FAILURE);
+  }
+  return p;
 }
 
 static void unlink_dir(const char *path) {
@@ -191,6 +223,12 @@ static int settimes(const char *path, const struct stat *st) {
   tv[1].tv_usec = 0;
 #endif
   return utimes(path, tv);
+}
+
+static int hardlink_entry_src_cmp(const void *a, const void *b) {
+  const struct hardlink_entry * const *hla = a;
+  const struct hardlink_entry * const *hlb = b;
+  return memcmp(*hla, *hlb, sizeof(dev_t) + sizeof(ino_t));
 }
 
 static void sync_file(
@@ -814,6 +852,9 @@ static void * traverse_file(
 ) {
   struct traverse_arg *t = arg;
   const char *p, *rel_path;
+  struct hardlink_entry hl, *hlp;
+  struct stat dst_st;
+  int rc;
   char dst_path[PATH_MAX];
 
   strcpy(dst_path, t->dst_root);
@@ -830,6 +871,47 @@ static void * traverse_file(
 
   if(excluded(g_exclude, g_exclude_count, rel_path, 0)) return NULL;
 
+  if(g_preserve_hardlinks && src_st->st_nlink > 1) {
+    hl.src_dev = src_st->st_dev;
+    hl.src_ino = src_st->st_ino;
+    pthread_mutex_lock(&g_hardlinks_mutex);
+    printf("HERE\n");
+    hlp = bsearch(&hl, g_hardlinks, g_hardlinks_count, sizeof(hl), hardlink_entry_src_cmp);
+    if(hlp) {
+      // the inode has already been sync'd, just link to it
+      rc = lstat(dst_path, &dst_st);
+      if(rc == 0) {
+        if(hlp->dst_dev == dst_st.st_dev && hlp->dst_ino == dst_st.st_ino) {
+          // hardlink is already present
+          pthread_mutex_unlock(&g_hardlinks_mutex);
+          return NULL;
+        }
+        // another file is present, remove it first
+        if(S_ISDIR(dst_st.st_mode)) {
+          unlink_dir(dst_path);
+        } else {
+          unlink(dst_path);
+        }
+      } else if(errno != ENOENT) {
+        // error stat'ing dst, give up
+        perror(dst_path);
+        g_error = 1;
+        pthread_mutex_unlock(&g_hardlinks_mutex);
+        return NULL;
+      }
+      if(g_verbose) printf("%s\n", rel_path);
+      // make the link
+      rc = link(hlp->dst_path, dst_path);
+      if(rc) {
+        perror(dst_path);
+        g_error = 1;
+      }
+      pthread_mutex_unlock(&g_hardlinks_mutex);
+      return NULL;
+    }
+    // hold g_hardlinks_mutex until later
+  }
+
   if(S_ISREG(src_st->st_mode)) {
     sync_file(src_st, src_path, dst_path, rel_path);
   } else if(S_ISLNK(src_st->st_mode)) {
@@ -845,6 +927,29 @@ static void * traverse_file(
   } else {
     fprintf(stderr, "file type not supported: %s\n", rel_path);
     g_error = 1;
+  }
+
+  if(g_preserve_hardlinks && src_st->st_nlink > 1) {
+    rc = lstat(dst_path, &dst_st);
+    if(rc) {
+      perror(dst_path);
+      g_error = 1;
+      return NULL;
+    }
+    if(g_hardlinks_count == g_hardlinks_size) {
+      g_hardlinks_size <<= 1;
+      g_hardlinks = xrealloc(g_hardlinks, sizeof(struct hardlink_entry) * g_hardlinks_size);
+    }
+    hlp = xmalloc(sizeof(hl));
+    hlp->src_dev = hl.src_dev;
+    hlp->src_ino = hl.src_ino;
+    hlp->dst_dev = dst_st.st_dev;
+    hlp->dst_ino = dst_st.st_ino;
+    hlp->dst_path = xmalloc(strlen(dst_path) + 1);
+    strcpy(hlp->dst_path, dst_path);
+    g_hardlinks[g_hardlinks_count++] = hlp;
+    qsort(g_hardlinks, g_hardlinks_count, sizeof(struct hardlink_entry *), hardlink_entry_src_cmp);
+    pthread_mutex_unlock(&g_hardlinks_mutex);
   }
 
   return NULL;
@@ -871,7 +976,7 @@ int main(int argc, char *argv[]) {
   g_euid = geteuid();
   threads = DEFAULT_NTHREADS;
 
-  while((opt = getopt(argc, argv, "hvj:apotDe:E:sw:x")) != -1) {
+  while((opt = getopt(argc, argv, "hvj:apotHDe:E:sw:x")) != -1) {
     switch(opt) {
     case 'h':
       usage(stdout, argv[0]);
@@ -899,6 +1004,9 @@ int main(int argc, char *argv[]) {
       break;
     case 't':
       g_preserve_mtime = 1;
+      break;
+    case 'H':
+      g_preserve_hardlinks = 1;
       break;
     case 'D':
       g_delete = 0;
@@ -954,6 +1062,13 @@ int main(int argc, char *argv[]) {
     g_dev = st.st_dev;
   }
 
+  if(g_preserve_hardlinks) {
+    g_hardlinks_count = 0;
+    g_hardlinks_size = 32;
+    g_hardlinks = xmalloc(sizeof(struct hardlink_entry *) * g_hardlinks_size);
+    pthread_mutex_init(&g_hardlinks_mutex, NULL);
+  }
+
   t.src_root = src_path;
   t.dst_root = dst_path;
   t.src_root_len = strlen(src_path);
@@ -972,6 +1087,15 @@ int main(int argc, char *argv[]) {
   if(rc) {
     perror(src_path);
     g_error = 1;
+  }
+
+  if(g_preserve_hardlinks) {
+    size_t i;
+    for(i = 0; i < g_hardlinks_count; ++i) {
+      free(g_hardlinks[i]->dst_path);
+      free(g_hardlinks[i]);
+    }
+    free(g_hardlinks);
   }
 
   if(g_exclude) free(g_exclude);
