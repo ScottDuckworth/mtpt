@@ -225,7 +225,7 @@ static int settimes(const char *path, const struct stat *st) {
   return utimes(path, tv);
 }
 
-static int hardlink_entry_src_cmp(const void *a, const void *b) {
+static int hardlink_entry_pcmp_src(const void *a, const void *b) {
   const struct hardlink_entry * const *hla = a;
   const struct hardlink_entry * const *hlb = b;
   return memcmp(*hla, *hlb, sizeof(dev_t) + sizeof(ino_t));
@@ -852,7 +852,7 @@ static void * traverse_file(
 ) {
   struct traverse_arg *t = arg;
   const char *p, *rel_path;
-  struct hardlink_entry hl, *hlp;
+  struct hardlink_entry hl, *hlp, **hlpp;
   struct stat dst_st;
   int rc;
   char dst_path[PATH_MAX];
@@ -874,10 +874,11 @@ static void * traverse_file(
   if(g_preserve_hardlinks && src_st->st_nlink > 1) {
     hl.src_dev = src_st->st_dev;
     hl.src_ino = src_st->st_ino;
+    hlp = &hl;
     pthread_mutex_lock(&g_hardlinks_mutex);
-    printf("HERE\n");
-    hlp = bsearch(&hl, g_hardlinks, g_hardlinks_count, sizeof(hl), hardlink_entry_src_cmp);
-    if(hlp) {
+    hlpp = bsearch(&hlp, g_hardlinks, g_hardlinks_count, sizeof(struct hardlink_entry *), hardlink_entry_pcmp_src);
+    if(hlpp) {
+      hlp = *hlpp;
       // the inode has already been sync'd, just link to it
       rc = lstat(dst_path, &dst_st);
       if(rc == 0) {
@@ -948,7 +949,7 @@ static void * traverse_file(
     hlp->dst_path = xmalloc(strlen(dst_path) + 1);
     strcpy(hlp->dst_path, dst_path);
     g_hardlinks[g_hardlinks_count++] = hlp;
-    qsort(g_hardlinks, g_hardlinks_count, sizeof(struct hardlink_entry *), hardlink_entry_src_cmp);
+    qsort(g_hardlinks, g_hardlinks_count, sizeof(struct hardlink_entry *), hardlink_entry_pcmp_src);
     pthread_mutex_unlock(&g_hardlinks_mutex);
   }
 
