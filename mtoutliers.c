@@ -115,7 +115,7 @@ static void * traverse_dir_exit(
       for(i = 0; i < entries_count; ++i) {
         data = entries[i]->data;
         if(data && data->size <= cutoff) {
-          printf("%6lu %s/%s\n", data->size, path, entries[i]->name);
+          printf("%6lu %s/%s\n", (long unsigned) data->size, path, entries[i]->name);
         }
       }
     } else {
@@ -124,7 +124,7 @@ static void * traverse_dir_exit(
         data = entries[i]->data;
         if(data && data->unreported_size >= cutoff) {
           unreported_size -= data->unreported_size;
-          printf("%12lu %s/%s\n", data->size, path, entries[i]->name);
+          printf("%12lu %s/%s\n", (long unsigned) data->size, path, entries[i]->name);
         }
       }
     }
