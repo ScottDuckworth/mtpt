@@ -36,6 +36,7 @@
 #include <unistd.h>
 
 #define DEFAULT_NTHREADS 4
+#define STACKSIZE (2<<20) // 2 MB
 
 static int g_error = 0;
 static int g_verbose = 0;
@@ -181,6 +182,7 @@ int main(int argc, char **argv) {
     l = strlen(argv[optind]);
     rc = mtpt(
       threads,
+      STACKSIZE,
       MTPT_CONFIG_FILE_TASKS | MTPT_CONFIG_SORT,
       argv[optind],
       traverse_dir_enter,

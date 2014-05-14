@@ -39,6 +39,7 @@
 #define DEFAULT_NTHREADS 4
 #define DEFAULT_FACTOR_GT 10
 #define DEFAULT_FACTOR_LT 100
+#define STACKSIZE (2<<20) // 2 MB
 
 static int g_error = 0;
 static const char **g_exclude = NULL;
@@ -242,6 +243,7 @@ int main(int argc, char **argv) {
     l = strlen(argv[optind]);
     rc = mtpt(
       threads,
+      STACKSIZE,
       MTPT_CONFIG_SORT,
       argv[optind],
       traverse_dir_enter,

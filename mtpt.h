@@ -175,6 +175,9 @@ typedef void * (*mtpt_error_method_t)(
  * @param nthreads
  * Number of threads.
  *
+ * @param stacksize
+ * Stack size in bytes of each thread.
+ *
  * @param config
  * Bitwise OR of MTPT_CONFIG_* options.
  *
@@ -202,6 +205,7 @@ typedef void * (*mtpt_error_method_t)(
  */
 int mtpt(
   size_t nthreads,
+  size_t stacksize,
   int config,
   const char *path,
   mtpt_dir_enter_method_t dir_enter_method,

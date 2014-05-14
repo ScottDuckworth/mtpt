@@ -171,11 +171,12 @@ static inline int ilog2(size_t val) {
   return i;
 }
 
-int threadpool_init(struct threadpool *tp, size_t nthreads, size_t qmax) {
-  return threadpool_init_prio(tp, nthreads, qmax, NULL);
+int threadpool_init(struct threadpool *tp, size_t nthreads, size_t stacksize, size_t qmax) {
+  return threadpool_init_prio(tp, nthreads, stacksize, qmax, NULL);
 }
 
-int threadpool_init_prio(struct threadpool *tp, size_t nthreads, size_t qmax, int (*priority_cmp)(const struct threadpool_task *, const struct threadpool_task *)) {
+int threadpool_init_prio(struct threadpool *tp, size_t nthreads, size_t stacksize, size_t qmax, int (*priority_cmp)(const struct threadpool_task *, const struct threadpool_task *)) {
+  pthread_attr_t attr;
   int i, rc;
 
   assert(nthreads > 0);
@@ -187,6 +188,13 @@ int threadpool_init_prio(struct threadpool *tp, size_t nthreads, size_t qmax, in
   rc = pthread_cond_init(&tp->consumer, NULL);
   if(rc) goto err2;
 
+  rc = pthread_attr_init(&attr);
+  if(rc) goto err3;
+  if(stacksize) {
+    rc = pthread_attr_setstacksize(&attr, stacksize);
+    if(rc) goto err4;
+  }
+
   tp->stop = 0;
   tp->nthreads = nthreads;
   tp->running = 0;
@@ -196,26 +204,28 @@ int threadpool_init_prio(struct threadpool *tp, size_t nthreads, size_t qmax, in
   tp->qcount = 0;
   tp->qmax = qmax;
   tp->q = malloc(sizeof(struct threadpool_task) * tp->qsize);
-  if(!tp->q) goto err3;
+  if(!tp->q) goto err4;
   tp->threads = malloc(sizeof(pthread_t) * nthreads);
-  if(!tp->threads) goto err4;
+  if(!tp->threads) goto err5;
   pthread_mutex_lock(&tp->mutex);
   for(i = 0; i < nthreads; ++i) {
-    rc = pthread_create(&tp->threads[i], NULL, threadpool_consumer, tp);
-    if(rc) goto err5;
+    rc = pthread_create(&tp->threads[i], &attr, threadpool_consumer, tp);
+    if(rc) goto err6;
   }
   pthread_mutex_unlock(&tp->mutex);
   return 0;
 
-err5:
+err6:
   pthread_mutex_unlock(&tp->mutex);
   for(--i; i >= 0; --i) {
     pthread_cancel(tp->threads[i]);
     pthread_join(tp->threads[i], NULL);
   }
   free(tp->threads);
-err4:
+err5:
   free(tp->q);
+err4:
+  pthread_attr_destroy(&attr);
 err3:
   pthread_cond_destroy(&tp->consumer);
 err2:

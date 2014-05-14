@@ -48,6 +48,7 @@
 
 #define IO_BUFFER_SIZE (1<<20) // 1 MB
 #define DEFAULT_NTHREADS 4
+#define STACKSIZE (2<<20) // 2 MB
 
 struct traverse_arg {
   const char *src_root;
@@ -1082,6 +1083,7 @@ int main(int argc, char *argv[]) {
   t.dst_root_len = strlen(dst_path);
   rc = mtpt(
     threads,
+    STACKSIZE,
     MTPT_CONFIG_FILE_TASKS | MTPT_CONFIG_SORT,
     src_path,
     traverse_dir_enter,

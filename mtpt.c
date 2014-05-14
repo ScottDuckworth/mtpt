@@ -432,6 +432,7 @@ static int mtpt_task_priority_cmp(
 
 int mtpt(
   size_t nthreads,
+  size_t stacksize,
   int config,
   const char *path,
   mtpt_dir_enter_method_t dir_enter_method,
@@ -479,7 +480,7 @@ int mtpt(
     ret = -1;
     goto out2;
   }
-  rc = threadpool_init_prio(&mtpt.tp, nthreads, 0, mtpt_task_priority_cmp);
+  rc = threadpool_init_prio(&mtpt.tp, nthreads, stacksize, 0, mtpt_task_priority_cmp);
   if(rc) {
     errno = rc;
     ret = -1;

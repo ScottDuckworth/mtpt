@@ -38,6 +38,7 @@
 #include <unistd.h>
 
 #define DEFAULT_NTHREADS 4
+#define STACKSIZE (2<<20) // 2 MB
 #define KiB (1lu << 10)
 #define MiB (1lu << 20)
 #define GiB (1lu << 30)
@@ -248,6 +249,7 @@ static void process_path(const char *path, size_t threads) {
 
   rc = mtpt(
     threads,
+    STACKSIZE,
     MTPT_CONFIG_SORT,
     path,
     traverse_dir_enter,
