@@ -84,6 +84,9 @@ static void usage(FILE *file, const char *arg0) {
 
 static int print_size(size_t size, const char *path) {
   float f;
+  if(size == 0) {
+    return printf("0\t%s%c", path, g_line_terminator);
+  }
   if(g_human_readable) {
     if(size < KiB) { // under 1K
       return printf("%lu\t%s%c", size, path, g_line_terminator);
