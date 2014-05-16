@@ -274,12 +274,6 @@ static void sync_file(
     dst_exists = 0;
   }
 
-  // remove dst if it has more than one link
-  if(dst_exists && dst_st.st_nlink > 1) {
-    unlink(dst_path);
-    dst_exists = 0;
-  }
-
   if(!dst_exists ||
      src_st->st_size != dst_st.st_size ||
      !samemtime(src_st, &dst_st)
@@ -288,6 +282,12 @@ static void sync_file(
     off_t length;
     int src_fd, dst_fd;
     char buf[IO_BUFFER_SIZE];
+
+    // remove dst if it has more than one link
+    if(dst_exists && dst_st.st_nlink > 1) {
+      unlink(dst_path);
+      dst_exists = 0;
+    }
 
     // open src for reading
     src_fd = open(src_path, O_RDONLY);
