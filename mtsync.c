@@ -940,8 +940,13 @@ static void * traverse_file(
   if(g_preserve_hardlinks && src_st->st_nlink > 1) {
     rc = lstat(dst_path, &dst_st);
     if(rc) {
-      perror(dst_path);
-      g_error = 1;
+      /* What has likely happened here is that the file was matched by a pattern
+       * in g_exclude_delete, which is found by sync_*(), and dst_path does not
+       * exist.  Another remote possibility is that the file was deleted by
+       * another process between sync_*() and now.  In either of these cases it
+       * is acceptable to break out now.
+       */
+      pthread_mutex_unlock(&g_hardlinks_mutex);
       return NULL;
     }
     if(g_hardlinks_count == g_hardlinks_size) {
